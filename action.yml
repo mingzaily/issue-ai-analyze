@@ -241,7 +241,8 @@ runs:
               'fallback_retry_template' => '你可以稍后编辑 Issue，或添加标签 {{rerun_labels}} 再试一次。',
               'fallback_manual' => '开发人员也可以直接手动打标签，不影响正常处理。',
               'normalize_summary_fallback' => '已完成自动分析，请维护者结合上下文继续判断。',
-              'normalize_info_fallback' => '当前信息基本足够进行初步分析。'
+              'normalize_info_fallback' => '当前信息基本足够进行初步分析。',
+              'normalize_duplicate_info' => '当前信息已足够判断这是一个重复问题，无需额外补充。'
             }
           else
             {
@@ -271,7 +272,8 @@ runs:
               'fallback_retry_template' => 'You can edit the issue later, or add label {{rerun_labels}} to try again.',
               'fallback_manual' => 'Developers can also apply labels manually without blocking normal issue handling.',
               'normalize_summary_fallback' => 'Automatic analysis completed, but maintainers should still review the context before making a final decision.',
-              'normalize_info_fallback' => 'The current information appears sufficient for an initial analysis.'
+              'normalize_info_fallback' => 'The current information appears sufficient for an initial analysis.',
+              'normalize_duplicate_info' => 'The current information is sufficient to identify this as a duplicate, and no extra details are required.'
             }
           end
 
@@ -812,6 +814,11 @@ runs:
               if (!Number.isFinite(result.duplicateOf) || !openIssueNumbers.has(result.duplicateOf)) {
                 result.disposition = 'none';
                 result.duplicateOf = null;
+              } else {
+                result.infoAssessment = safeString(
+                  language.normalize_duplicate_info,
+                  220
+                ) || 'The current information is sufficient to identify this as a duplicate, and no extra details are required.';
               }
             } else {
               result.duplicateOf = null;
@@ -954,10 +961,6 @@ runs:
             `- **${t('confidence_label', 'Confidence')}**: ${Math.round(Number(result.confidence || 0) * 100)}%`
           ];
 
-          if (result.duplicateOf) {
-            lines.push(`- **${t('duplicate_of_label', 'Possible duplicate of')}**: #${result.duplicateOf}`);
-          }
-
           if (Array.isArray(result.supplementSuggestions) && result.supplementSuggestions.length > 0) {
             lines.push('');
             lines.push(result.needsInfo ? t('suggestions_heading_needed', '### Suggested follow-up') : t('suggestions_heading_optional', '### Optional follow-up'));
@@ -979,6 +982,55 @@ runs:
             repo,
             comment_id: commentId,
             body: lines.join('\n')
+          });
+
+    - name: Publish native duplicate relation comment
+      if: ${{ steps.prepare.outputs.should_run == 'true' && steps.normalize.outputs.ok == 'true' }}
+      uses: actions/github-script@v7
+      env:
+        TRIAGE_RESULT: ${{ steps.normalize.outputs.json }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const issueNumber = Number(context.payload.issue.number);
+          const result = JSON.parse(process.env.TRIAGE_RESULT || '{}');
+          const duplicateOf = Number(result.duplicateOf || 0);
+
+          if (String(result.disposition || '') !== 'duplicate' || !Number.isInteger(duplicateOf) || duplicateOf <= 0) {
+            core.info('Skip native duplicate comment: analysis result is not a duplicate.');
+            return;
+          }
+
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner,
+            repo,
+            issue_number: issueNumber,
+            per_page: 100
+          });
+
+          const normalizeBody = (value) => String(value || '').trim();
+          const expectedBody = `Duplicate of #${duplicateOf}`;
+          const duplicatePattern = /^Duplicate of #(\d+)\b/i;
+
+          const existingExactComment = comments.find(comment => normalizeBody(comment.body) === expectedBody);
+          if (existingExactComment) {
+            core.info(`Skip native duplicate comment: already linked to #${duplicateOf} by comment ${existingExactComment.id}.`);
+            return;
+          }
+
+          const existingDuplicateComment = comments.find(comment => duplicatePattern.test(normalizeBody(comment.body)));
+          if (existingDuplicateComment) {
+            core.info(`Skip native duplicate comment: duplicate relation already exists in comment ${existingDuplicateComment.id}.`);
+            return;
+          }
+
+          await github.rest.issues.createComment({
+            owner,
+            repo,
+            issue_number: issueNumber,
+            body: expectedBody
           });
 
     - name: Publish fallback comment

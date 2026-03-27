@@ -50,6 +50,12 @@ messages:
       number.
       - If you cannot confidently point to an open issue, do not mark it as
       duplicate.
+      - When disposition is duplicate, keep summary focused on the current
+      issue topic itself. Do not repeat the matched issue number, title, or a
+      markdown link in summary.
+      - When disposition is duplicate, infoAssessment should simply state that
+      the current information is sufficient to identify it as a duplicate. Do
+      not repeat the matched issue number, title, or a markdown link there.
       - If disposition is not none, needsInfo must be false and
       supplementSuggestions must be an empty array.
       - Set needsInfo to true only when key information is clearly missing and
