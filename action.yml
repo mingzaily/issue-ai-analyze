@@ -81,6 +81,15 @@ outputs:
   transport:
     description: Which inference transport was selected.
     value: ${{ steps.resolve.outputs.transport }}
+  resolved-model:
+    description: Effective model resolved from the prompt file or action defaults.
+    value: ${{ steps.resolve.outputs.resolved_model }}
+  resolved-response-format:
+    description: Effective response format resolved from the prompt file.
+    value: ${{ steps.resolve.outputs.resolved_response_format }}
+  resolved-model-parameters:
+    description: Effective modelParameters object resolved from the prompt file, serialized as JSON.
+    value: ${{ steps.resolve.outputs.resolved_model_parameters_json }}
 
 runs:
   using: composite
@@ -287,6 +296,18 @@ runs:
         prompt['model'] = model_override unless model_override.empty?
         File.write(ENV.fetch('RESOLVED_PROMPT_FILE'), YAML.dump(prompt))
 
+        resolved_model = prompt['model'].to_s.strip
+        resolved_model = 'openai/gpt-4o' if resolved_model.empty?
+
+        resolved_response_format = prompt['responseFormat'].to_s.strip
+        resolved_model_parameters =
+          case prompt['modelParameters']
+          when Hash
+            prompt['modelParameters']
+          else
+            {}
+          end
+
         detect_placeholder_indent = lambda do |placeholder|
           pattern = /\A(\s*)\{\{#{Regexp.escape(placeholder)}\}\}\s*\z/
           File.foreach(ENV.fetch('RESOLVED_PROMPT_FILE')) do |line|
@@ -391,11 +412,24 @@ runs:
           f.puts("language_profile_json=#{JSON.generate(language_profile)}")
           f.puts("rerun_labels_json=#{JSON.generate(rerun_labels)}")
           f.puts("file_input_indent_json=#{JSON.generate(file_input_indent_map)}")
+          f.puts("resolved_model=#{resolved_model}")
+          f.puts("resolved_response_format=#{resolved_response_format}")
+          f.puts("resolved_model_parameters_json=#{JSON.generate(resolved_model_parameters)}")
           f.puts("language=#{normalized_language}")
           f.puts("use_custom_endpoint=#{endpoint.empty? ? 'false' : 'true'}")
           f.puts("transport=#{transport}")
         end
         RUBY
+
+    - name: Log resolved inference config
+      shell: bash
+      run: |
+        echo "Resolved inference config:"
+        echo "- transport: ${{ steps.resolve.outputs.transport }}"
+        echo "- prompt file: ${{ steps.resolve.outputs.resolved_prompt_file }}"
+        echo "- model: ${{ steps.resolve.outputs.resolved_model }}"
+        echo "- response format: ${{ steps.resolve.outputs.resolved_response_format || 'none' }}"
+        echo "- model parameters: ${{ steps.resolve.outputs.resolved_model_parameters_json }}"
 
     - name: Prepare issue context and pending comment
       id: prepare
