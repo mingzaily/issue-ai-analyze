@@ -1,0 +1,973 @@
+name: Issue AI Analyze
+description: Analyze GitHub issues with actions/ai-inference, apply mapped labels, and publish AI comments.
+
+inputs:
+  github-token:
+    description: GitHub token with issue write permission. In most workflows this is just secrets.GITHUB_TOKEN.
+    required: true
+  prompt-file:
+    description: Optional custom prompt YAML file. Defaults to prompts/general.prompt.yml.
+    required: false
+    default: ""
+  model:
+    description: Optional model override written into the resolved prompt before inference.
+    required: false
+    default: ""
+  language:
+    description: "Output language for bundled prompt instructions and built-in comments. Supported values: zh, en."
+    required: false
+    default: "zh"
+  label-map:
+    description: Optional inline label mapping. Use one key=value entry per line, for example bug=type/bug. Use rerun=ai-rerun,ai-recheck for rerun labels.
+    required: false
+    default: ""
+  label-map-file:
+    description: Optional YAML or TOML file path for label management config. Supported keys are bug, question, enhancement, documentation, duplicate, needs-info, and rerun. Takes precedence over label-map.
+    required: false
+    default: ""
+  openai-compatible-endpoint:
+    description: Optional OpenAI-compatible endpoint. When set together with the token, GitHub Models is skipped.
+    required: false
+    default: ""
+  openai-compatible-token:
+    description: Optional token for the OpenAI-compatible endpoint.
+    required: false
+    default: ""
+  openai-compatible-headers:
+    description: Optional custom headers forwarded to actions/ai-inference.
+    required: false
+    default: ""
+  comment-marker:
+    description: Hidden marker used to find the latest AI analysis comment.
+    required: false
+    default: "<!-- issue-ai-analyze -->"
+  recent-comments-limit:
+    description: Number of recent comments passed to the model.
+    required: false
+    default: "10"
+  open-issues-limit:
+    description: Number of open issues included for duplicate detection.
+    required: false
+    default: "50"
+
+outputs:
+  should-run:
+    description: Whether the current event triggered an analysis run.
+    value: ${{ steps.prepare.outputs.should_run }}
+  ok:
+    description: Whether AI normalization succeeded.
+    value: ${{ steps.normalize.outputs.ok }}
+  result-json:
+    description: Normalized analysis result JSON.
+    value: ${{ steps.normalize.outputs.json }}
+  labels:
+    description: JSON array of labels applied to the issue after mapping.
+    value: ${{ steps.normalize.outputs.labels }}
+  category:
+    description: Normalized category selected by the model.
+    value: ${{ steps.normalize.outputs.category }}
+  disposition:
+    description: Normalized disposition selected by the model.
+    value: ${{ steps.normalize.outputs.disposition }}
+  needs-info:
+    description: Whether the issue still needs more information after normalization.
+    value: ${{ steps.normalize.outputs.needs_info }}
+  comment-id:
+    description: The AI comment ID created or updated during this run.
+    value: ${{ steps.prepare.outputs.comment_id }}
+  comment-strategy:
+    description: Whether this run replaced the latest AI comment or created a new one.
+    value: ${{ steps.prepare.outputs.comment_strategy }}
+  transport:
+    description: Which inference transport was selected.
+    value: ${{ steps.resolve.outputs.transport }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve prompt and label map
+      id: resolve
+      shell: bash
+      env:
+        INPUT_PROMPT_FILE: ${{ inputs.prompt-file }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_LANGUAGE: ${{ inputs.language }}
+        INPUT_LABEL_MAP: ${{ inputs.label-map }}
+        INPUT_LABEL_MAP_FILE: ${{ inputs.label-map-file }}
+        INPUT_OPENAI_COMPAT_ENDPOINT: ${{ inputs.openai-compatible-endpoint }}
+        INPUT_OPENAI_COMPAT_TOKEN: ${{ inputs.openai-compatible-token }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        export RESOLVED_PROMPT_FILE="$RUNNER_TEMP/issue-ai-analyze-prompt-${GITHUB_RUN_ID}-${GITHUB_ACTION}.yml"
+        ruby <<'RUBY'
+        require 'json'
+        require 'yaml'
+
+        normalize_map_string = lambda do |raw|
+          value = raw.to_s.strip
+          if (value.start_with?('"') && value.end_with?('"')) || (value.start_with?("'") && value.end_with?("'"))
+            value = value[1...-1]
+          end
+          value.strip
+        end
+
+        parse_label_map_inline = lambda do |raw|
+          parsed = {}
+          raw.to_s.gsub(';', "\n").each_line.with_index(1) do |line, line_number|
+            stripped = line.sub(/\s+#.*\z/, '').strip
+            next if stripped.empty?
+
+            match = stripped.match(/\A([A-Za-z0-9._-]+)\s*=\s*(.+)\z/)
+            unless match
+              abort("Invalid label-map entry at line #{line_number}. Expected key=value, got: #{line.strip}")
+            end
+
+            parsed[match[1]] = normalize_map_string.call(match[2])
+          end
+          parsed
+        end
+
+        parse_toml_value = lambda do |raw, path, line_number|
+          value = raw.to_s.strip
+          if value.start_with?('[')
+            unless value.end_with?(']')
+              abort("Invalid TOML array in #{path}:#{line_number}")
+            end
+
+            inner = value[1...-1].to_s.strip
+            if inner.empty?
+              []
+            else
+              inner.split(',').map { |item| normalize_map_string.call(item) }.reject(&:empty?)
+            end
+          else
+            normalize_map_string.call(value)
+          end
+        end
+
+        parse_label_map_file = lambda do |path|
+          content = File.read(path)
+          ext = File.extname(path).downcase
+
+          case ext
+          when '.toml'
+            parsed = {}
+            content.each_line.with_index(1) do |line, line_number|
+              stripped = line.sub(/\s+#.*\z/, '').strip
+              next if stripped.empty?
+
+              if stripped.start_with?('[')
+                abort("TOML tables are not supported in label-map-file: #{path}:#{line_number}")
+              end
+
+              match = stripped.match(/\A([A-Za-z0-9._-]+)\s*=\s*(.+)\z/)
+              unless match
+                abort("Invalid TOML label-map entry at #{path}:#{line_number}")
+              end
+
+              parsed[match[1]] = parse_toml_value.call(match[2], path, line_number)
+            end
+            parsed
+          else
+            YAML.safe_load(content, aliases: false) || {}
+          end
+        end
+
+        default_prompt = File.join(ENV.fetch('ACTION_PATH'), 'prompts', 'general.prompt.yml')
+        prompt_source = ENV['INPUT_PROMPT_FILE'].to_s.strip
+        prompt_source = default_prompt if prompt_source.empty?
+        unless File.exist?(prompt_source)
+          abort("Prompt file not found: #{prompt_source}")
+        end
+
+        raw_language = ENV['INPUT_LANGUAGE'].to_s.strip.downcase
+        normalized_language =
+          case raw_language
+          when '', 'zh'
+            'zh'
+          when 'en'
+            'en'
+          else
+            abort("Unsupported language: #{raw_language}. Supported values are: zh, en")
+          end
+
+        endpoint = ENV['INPUT_OPENAI_COMPAT_ENDPOINT'].to_s.strip
+        token = ENV['INPUT_OPENAI_COMPAT_TOKEN'].to_s.strip
+        if endpoint.empty? ^ token.empty?
+          abort('openai-compatible-endpoint and openai-compatible-token must be set together')
+        end
+
+        prompt = YAML.load_file(prompt_source)
+        unless prompt.is_a?(Hash)
+          abort("Prompt file must be a YAML mapping: #{prompt_source}")
+        end
+
+        language_profile =
+          if normalized_language == 'zh'
+            {
+              'code' => 'zh',
+              'prompt_language_name' => 'Chinese',
+              'comment_none_label' => '（无）',
+              'pending_title' => '## 🤖 AI 分析进行中',
+              'pending_body' => '正在分析该 Issue 并生成总结与标签建议，请稍候…',
+              'pending_preserve' => '检测到提问者补充了信息，本次会新增一条 AI 分析评论，保留之前的分析记录。',
+              'pending_replace' => '本次分析结果会直接更新最新一条 AI 分析评论。',
+              'analysis_title' => '## 🤖 AI 初步分析结果',
+              'summary_label' => '问题概述',
+              'suggested_labels_label' => '建议标签',
+              'suggested_title_label' => '建议标题',
+              'info_assessment_label' => '信息完整度',
+              'confidence_label' => '置信度',
+              'duplicate_of_label' => '可能重复于',
+              'suggestions_heading_needed' => '### 建议补充',
+              'suggestions_heading_optional' => '### 可选补充',
+              'sync_note' => '本次结果已同步到当前 Issue 标签。开发人员仍可按实际情况直接调整。',
+              'rerun_intro' => '如后续补充了信息：',
+              'rerun_needs_info' => '- 提问者在 `needs-info` 状态下直接回复，我会自动重新分析。',
+              'rerun_manual_template' => '- 开发人员可通过添加标签 {{rerun_labels}} 手动重跑。',
+              'fallback_title' => '## ⚠️ AI 初步分析暂时失败',
+              'fallback_body' => '本次自动分析未成功完成，可能是模型调用失败、返回格式异常或网络波动导致。',
+              'diagnostic_label' => '诊断信息',
+              'fallback_retry_template' => '你可以稍后编辑 Issue，或添加标签 {{rerun_labels}} 再试一次。',
+              'fallback_manual' => '开发人员也可以直接手动打标签，不影响正常处理。',
+              'normalize_summary_fallback' => '已完成自动分析，请维护者结合上下文继续判断。',
+              'normalize_info_fallback' => '当前信息基本足够进行初步分析。'
+            }
+          else
+            {
+              'code' => 'en',
+              'prompt_language_name' => 'English',
+              'comment_none_label' => '(none)',
+              'pending_title' => '## 🤖 AI Analysis In Progress',
+              'pending_body' => 'Analyzing this issue and preparing a summary plus label suggestions. Please wait…',
+              'pending_preserve' => 'The issue author added more information, so this run will create a new AI comment and keep previous analysis history.',
+              'pending_replace' => 'This run will update the latest AI analysis comment in place.',
+              'analysis_title' => '## 🤖 AI Initial Analysis',
+              'summary_label' => 'Summary',
+              'suggested_labels_label' => 'Suggested labels',
+              'suggested_title_label' => 'Suggested title',
+              'info_assessment_label' => 'Information assessment',
+              'confidence_label' => 'Confidence',
+              'duplicate_of_label' => 'Possible duplicate of',
+              'suggestions_heading_needed' => '### Suggested follow-up',
+              'suggestions_heading_optional' => '### Optional follow-up',
+              'sync_note' => 'The suggested labels above have already been synced to this issue. Developers can still adjust them manually.',
+              'rerun_intro' => 'If more information is added later:',
+              'rerun_needs_info' => '- When the issue author replies while `needs-info` is present, I will rerun automatically.',
+              'rerun_manual_template' => '- Developers can add label {{rerun_labels}} to rerun manually.',
+              'fallback_title' => '## ⚠️ AI Analysis Failed',
+              'fallback_body' => 'This automatic analysis did not complete successfully. The cause may be model access failure, invalid output format, or a temporary network problem.',
+              'diagnostic_label' => 'Diagnostic',
+              'fallback_retry_template' => 'You can edit the issue later, or add label {{rerun_labels}} to try again.',
+              'fallback_manual' => 'Developers can also apply labels manually without blocking normal issue handling.',
+              'normalize_summary_fallback' => 'Automatic analysis completed, but maintainers should still review the context before making a final decision.',
+              'normalize_info_fallback' => 'The current information appears sufficient for an initial analysis.'
+            }
+          end
+
+        if prompt_source == default_prompt
+          replace_tokens = lambda do |value|
+            case value
+            when String
+              value.gsub('{{output_language_name}}', language_profile.fetch('prompt_language_name'))
+            when Array
+              value.map { |item| replace_tokens.call(item) }
+            when Hash
+              value.each_with_object({}) { |(key, nested_value), acc| acc[key] = replace_tokens.call(nested_value) }
+            else
+              value
+            end
+          end
+
+          prompt = replace_tokens.call(prompt)
+        end
+
+        model_override = ENV['INPUT_MODEL'].to_s.strip
+        prompt['model'] = model_override unless model_override.empty?
+        File.write(ENV.fetch('RESOLVED_PROMPT_FILE'), YAML.dump(prompt))
+
+        default_label_map = {
+          'bug' => 'bug',
+          'question' => 'question',
+          'enhancement' => 'enhancement',
+          'documentation' => 'documentation',
+          'duplicate' => 'duplicate',
+          'needs-info' => 'needs-info'
+        }
+
+        label_map_file = ENV['INPUT_LABEL_MAP_FILE'].to_s.strip
+        label_map_inline = ENV['INPUT_LABEL_MAP'].to_s
+        parsed_label_map =
+          if !label_map_file.empty?
+            unless File.exist?(label_map_file)
+              abort("Label map file not found: #{label_map_file}")
+            end
+            parse_label_map_file.call(label_map_file)
+          elsif !label_map_inline.strip.empty?
+            parse_label_map_inline.call(label_map_inline)
+          else
+            {}
+          end
+
+        unless parsed_label_map.is_a?(Hash)
+          abort('label-map configuration must resolve to a mapping')
+        end
+
+        extract_rerun_labels = lambda do |raw|
+          items =
+            case raw
+            when nil
+              []
+            when Array
+              raw.flatten.compact.map(&:to_s)
+            else
+              raw.to_s.split(/[\n,]+/)
+            end
+
+          seen = {}
+          normalized = []
+          items.each do |item|
+            label = item.to_s.strip
+            next if label.empty?
+            key = label.downcase
+            next if seen[key]
+            seen[key] = true
+            normalized << label
+          end
+          normalized
+        end
+
+        raw_rerun_labels =
+          parsed_label_map.delete('rerun-labels') ||
+          parsed_label_map.delete('rerun_labels') ||
+          parsed_label_map.delete('rerun')
+
+        allowed_label_keys = default_label_map.keys
+        unknown_label_keys =
+          parsed_label_map.keys
+            .map { |key| key.to_s.strip.downcase }
+            .reject(&:empty?)
+            .uniq - allowed_label_keys
+        unless unknown_label_keys.empty?
+          abort("Unknown label-map keys: #{unknown_label_keys.join(', ')}. Supported keys: #{allowed_label_keys.join(', ')}, rerun")
+        end
+
+        rerun_labels = extract_rerun_labels.call(raw_rerun_labels)
+        rerun_labels = ['ai-rerun'] if rerun_labels.empty?
+
+        normalized_label_map = default_label_map.merge(
+          parsed_label_map.each_with_object({}) do |(key, value), acc|
+            label_key = key.to_s.strip.downcase
+            next if label_key.empty?
+            if value.is_a?(Array) || value.is_a?(Hash)
+              abort("label-map value for #{label_key} must be a string")
+            end
+            label_value = value.to_s.strip
+            next if label_value.empty?
+            acc[label_key] = label_value
+          end
+        )
+
+        transport = endpoint.empty? ? 'github-models' : 'openai-compatible'
+        File.open(ENV.fetch('GITHUB_OUTPUT'), 'a') do |f|
+          f.puts("resolved_prompt_file=#{ENV.fetch('RESOLVED_PROMPT_FILE')}")
+          f.puts("label_map_json=#{JSON.generate(normalized_label_map)}")
+          f.puts("language_profile_json=#{JSON.generate(language_profile)}")
+          f.puts("rerun_labels_json=#{JSON.generate(rerun_labels)}")
+          f.puts("language=#{normalized_language}")
+          f.puts("use_custom_endpoint=#{endpoint.empty? ? 'false' : 'true'}")
+          f.puts("transport=#{transport}")
+        end
+        RUBY
+
+    - name: Prepare issue context and pending comment
+      id: prepare
+      uses: actions/github-script@v7
+      env:
+        LABEL_MAP_JSON: ${{ steps.resolve.outputs.label_map_json }}
+        LANGUAGE_PROFILE_JSON: ${{ steps.resolve.outputs.language_profile_json }}
+        RERUN_LABELS_JSON: ${{ steps.resolve.outputs.rerun_labels_json }}
+        COMMENT_MARKER: ${{ inputs.comment-marker }}
+        RECENT_COMMENTS_LIMIT: ${{ inputs.recent-comments-limit }}
+        OPEN_ISSUES_LIMIT: ${{ inputs.open-issues-limit }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+
+          const labelMap = JSON.parse(process.env.LABEL_MAP_JSON || '{}');
+          const language = JSON.parse(process.env.LANGUAGE_PROFILE_JSON || '{}');
+          const rerunLabels = JSON.parse(process.env.RERUN_LABELS_JSON || '[]');
+          const t = (key, fallback = '') => String(language[key] || fallback);
+          const commentMarker = String(process.env.COMMENT_MARKER || '<!-- issue-ai-analyze -->').trim() || '<!-- issue-ai-analyze -->';
+          const recentCommentsLimit = Math.max(1, Number(process.env.RECENT_COMMENTS_LIMIT || '10'));
+          const openIssuesLimit = Math.max(1, Number(process.env.OPEN_ISSUES_LIMIT || '50'));
+          const mappedNeedsInfo = String(labelMap['needs-info'] || 'needs-info').trim().toLowerCase();
+          const normalizedRerunLabels = new Set(rerunLabels.map(label => String(label || '').trim().toLowerCase()).filter(Boolean));
+
+          const promptBlockIndent = '      ';
+          const toPromptFileValue = (value) =>
+            [
+              '',
+              ...String(value || '')
+                .replace(/\r\n/g, '\n')
+                .split('\n')
+                .map(line => (line ? `${promptBlockIndent}${line}` : ''))
+            ].join('\n');
+
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const issueNumber = context.payload.issue?.number;
+
+          if (!issueNumber) {
+            core.setOutput('should_run', 'false');
+            core.info('Skip: no issue number in event payload.');
+            return;
+          }
+
+          const issueResp = await github.rest.issues.get({
+            owner,
+            repo,
+            issue_number: issueNumber
+          });
+          const issue = issueResp.data;
+
+          if (issue.pull_request) {
+            core.setOutput('should_run', 'false');
+            core.info('Skip: pull request conversation is not supported.');
+            return;
+          }
+
+          const lowerLabels = (issue.labels || []).map(label =>
+            String(typeof label === 'string' ? label : label.name || '').toLowerCase()
+          );
+
+          let triggerReason = '';
+          let shouldRun = false;
+          let commentStrategy = 'replace_latest';
+          const triggerReasons = {
+            opened: 'Issue opened. Run the initial AI analysis.',
+            reopened: 'Issue reopened. Run the initial AI analysis again.',
+            edited: 'Issue title or body changed. Run the initial AI analysis again.',
+            changed: 'Issue content changed. Run the initial AI analysis again.',
+            authorReply: 'The issue author replied while the issue is in needs-info state. Run the AI analysis again.',
+            manualRerun: 'Received a configured manual rerun label. Run the AI analysis again.'
+          };
+
+          if (context.eventName === 'issues') {
+            const action = context.payload.action;
+            const issueState = String(issue.state || '').toLowerCase();
+
+            if (['opened', 'reopened', 'edited'].includes(action)) {
+              shouldRun = true;
+              triggerReason = {
+                opened: triggerReasons.opened,
+                reopened: triggerReasons.reopened,
+                edited: triggerReasons.edited
+              }[action] || triggerReasons.changed;
+            } else if (action === 'labeled' && issueState === 'open') {
+              const labeledName = String(context.payload.label?.name || '').trim();
+              if (normalizedRerunLabels.has(labeledName.toLowerCase())) {
+                shouldRun = true;
+                triggerReason = triggerReasons.manualRerun;
+                commentStrategy = 'replace_latest';
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner,
+                    repo,
+                    issue_number: issueNumber,
+                    name: labeledName
+                  });
+                } catch (error) {
+                  core.info(`Skip removing rerun label ${labeledName}: ${error.message}`);
+                }
+              }
+            }
+          }
+
+          if (context.eventName === 'issue_comment') {
+            const comment = context.payload.comment;
+            const commenter = String(comment?.user?.login || '').toLowerCase();
+            const issueAuthor = String(issue.user?.login || '').toLowerCase();
+            const issueState = String(issue.state || '').toLowerCase();
+            const hasNeedsInfo = lowerLabels.includes(mappedNeedsInfo);
+
+            if (issueState !== 'open') {
+              core.setOutput('should_run', 'false');
+              core.info('Skip: issue is not open.');
+              return;
+            }
+
+            if (commenter && commenter === issueAuthor && hasNeedsInfo) {
+              shouldRun = true;
+              triggerReason = triggerReasons.authorReply;
+              commentStrategy = 'new_comment';
+            }
+          }
+
+          if (!shouldRun) {
+            core.setOutput('should_run', 'false');
+            core.info('Skip: event does not require issue analysis.');
+            return;
+          }
+
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner,
+            repo,
+            issue_number: issueNumber,
+            per_page: 100
+          });
+
+          const existingComment = [...comments].reverse().find(comment => {
+            const body = String(comment.body || '');
+            return body.includes(commentMarker) && String(comment.user?.type || '') === 'Bot';
+          });
+
+          const pendingLines = [
+            t('pending_title', '## 🤖 AI Analysis In Progress'),
+            '',
+            t('pending_body', 'Analyzing this issue and preparing a summary plus label suggestions. Please wait…'),
+            '',
+            commentStrategy === 'new_comment'
+              ? t('pending_preserve')
+              : t('pending_replace'),
+            commentMarker
+          ];
+
+          let commentId = 0;
+          if (existingComment && commentStrategy === 'replace_latest') {
+            await github.rest.issues.updateComment({
+              owner,
+              repo,
+              comment_id: existingComment.id,
+              body: pendingLines.join('\n')
+            });
+            commentId = existingComment.id;
+          } else {
+            const createResp = await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: issueNumber,
+              body: pendingLines.join('\n')
+            });
+            commentId = createResp.data.id;
+          }
+
+          const openIssuesResp = await github.paginate(github.rest.issues.listForRepo, {
+            owner,
+            repo,
+            state: 'open',
+            per_page: 100
+          });
+          const openIssues = openIssuesResp
+            .filter(item => !item.pull_request && item.number !== issueNumber)
+            .slice(0, openIssuesLimit);
+
+          const openIssueNumbers = openIssues.map(item => item.number);
+          const openIssueSummary = openIssues.length
+            ? openIssues.map(item => {
+                const labels = (item.labels || [])
+                  .map(label => String(typeof label === 'string' ? label : label.name || '').trim())
+                  .filter(Boolean)
+                  .join(', ');
+                const body = String(item.body || '')
+                  .replace(/\s+/g, ' ')
+                  .slice(0, 180);
+                return `#${item.number} | ${item.title} | labels=[${labels}] | body=${body}`;
+              }).join('\n')
+            : '（当前没有其他 open issues）';
+
+          const recentComments = comments.length
+            ? comments.slice(-recentCommentsLimit).map(comment => {
+                const author = comment.user?.login || 'unknown';
+                const body = String(comment.body || '')
+                  .replace(/\s+/g, ' ')
+                  .slice(0, 300);
+                return `${author}: ${body}`;
+              }).join('\n')
+            : '（暂无评论）';
+
+          const baseDir = process.env.RUNNER_TEMP || process.cwd();
+          const bodyFile = path.join(baseDir, `issue-${issueNumber}-body.md`);
+          const openIssuesFile = path.join(baseDir, `issue-${issueNumber}-open-issues.txt`);
+          const commentsFile = path.join(baseDir, `issue-${issueNumber}-comments.txt`);
+
+          fs.writeFileSync(bodyFile, toPromptFileValue(issue.body || '（无正文）'));
+          fs.writeFileSync(openIssuesFile, toPromptFileValue(openIssueSummary));
+          fs.writeFileSync(commentsFile, toPromptFileValue(recentComments));
+
+          const currentLabels = (issue.labels || [])
+            .map(label => String(typeof label === 'string' ? label : label.name || '').trim())
+            .filter(Boolean)
+            .join(', ') || '（无）';
+
+          core.setOutput('should_run', 'true');
+          core.setOutput('comment_id', String(commentId));
+          core.setOutput('issue_number', String(issueNumber));
+          core.setOutput('issue_title', issue.title);
+          core.setOutput('current_labels', currentLabels);
+          core.setOutput('trigger_reason', triggerReason);
+          core.setOutput('issue_body_file', bodyFile);
+          core.setOutput('open_issues_file', openIssuesFile);
+          core.setOutput('recent_comments_file', commentsFile);
+          core.setOutput('open_issue_numbers', JSON.stringify(openIssueNumbers));
+          core.setOutput('comment_strategy', commentStrategy);
+
+    - name: Skip irrelevant event
+      if: ${{ steps.prepare.outputs.should_run != 'true' }}
+      shell: bash
+      run: echo "issue analysis skipped for this event."
+
+    - name: Run AI inference with custom endpoint
+      if: ${{ steps.prepare.outputs.should_run == 'true' && steps.resolve.outputs.use_custom_endpoint == 'true' }}
+      id: inference_custom
+      continue-on-error: true
+      uses: actions/ai-inference@v1
+      with:
+        prompt-file: ${{ steps.resolve.outputs.resolved_prompt_file }}
+        input: |
+          trigger_reason: |
+            ${{ steps.prepare.outputs.trigger_reason }}
+          current_labels: |
+            ${{ steps.prepare.outputs.current_labels }}
+          issue_title: |
+            ${{ steps.prepare.outputs.issue_title }}
+        file_input: |
+          issue_body: ${{ steps.prepare.outputs.issue_body_file }}
+          recent_comments: ${{ steps.prepare.outputs.recent_comments_file }}
+          open_issues: ${{ steps.prepare.outputs.open_issues_file }}
+        endpoint: ${{ inputs.openai-compatible-endpoint }}
+        token: ${{ inputs.openai-compatible-token }}
+        custom-headers: ${{ inputs.openai-compatible-headers }}
+
+    - name: Run AI inference with GitHub Models
+      if: ${{ steps.prepare.outputs.should_run == 'true' && steps.resolve.outputs.use_custom_endpoint != 'true' }}
+      id: inference_github_models
+      continue-on-error: true
+      uses: actions/ai-inference@v1
+      with:
+        prompt-file: ${{ steps.resolve.outputs.resolved_prompt_file }}
+        input: |
+          trigger_reason: |
+            ${{ steps.prepare.outputs.trigger_reason }}
+          current_labels: |
+            ${{ steps.prepare.outputs.current_labels }}
+          issue_title: |
+            ${{ steps.prepare.outputs.issue_title }}
+        file_input: |
+          issue_body: ${{ steps.prepare.outputs.issue_body_file }}
+          recent_comments: ${{ steps.prepare.outputs.recent_comments_file }}
+          open_issues: ${{ steps.prepare.outputs.open_issues_file }}
+
+    - name: Normalize AI result
+      if: ${{ steps.prepare.outputs.should_run == 'true' }}
+      id: normalize
+      uses: actions/github-script@v7
+      env:
+        AI_RESPONSE_FILE: ${{ steps.inference_custom.outputs.response-file || steps.inference_github_models.outputs.response-file }}
+        OPEN_ISSUE_NUMBERS: ${{ steps.prepare.outputs.open_issue_numbers }}
+        LABEL_MAP_JSON: ${{ steps.resolve.outputs.label_map_json }}
+        LANGUAGE_PROFILE_JSON: ${{ steps.resolve.outputs.language_profile_json }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+
+          const fail = (message) => {
+            core.setOutput('ok', 'false');
+            core.setOutput('error', String(message || 'unknown-error').slice(0, 1000));
+          };
+
+          const parseJson = (raw) => {
+            const text = String(raw || '').trim();
+            if (!text) {
+              throw new Error('empty-ai-response');
+            }
+            try {
+              return JSON.parse(text);
+            } catch {
+              const first = text.indexOf('{');
+              const last = text.lastIndexOf('}');
+              if (first >= 0 && last > first) {
+                return JSON.parse(text.slice(first, last + 1));
+              }
+              throw new Error('invalid-json-response');
+            }
+          };
+
+          const safeString = (value, maxLength) =>
+            String(value || '')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .slice(0, maxLength);
+
+          try {
+            const responseFile = String(process.env.AI_RESPONSE_FILE || '').trim();
+            if (!responseFile) {
+              fail('missing-ai-response-file');
+              return;
+            }
+
+            const raw = fs.readFileSync(responseFile, 'utf8');
+            const parsed = parseJson(raw);
+            const allowedCategories = new Set(['bug', 'question', 'enhancement', 'documentation']);
+            const allowedDispositions = new Set(['duplicate', 'none']);
+            const openIssueNumbers = new Set(JSON.parse(process.env.OPEN_ISSUE_NUMBERS || '[]').map(Number));
+            const labelMap = JSON.parse(process.env.LABEL_MAP_JSON || '{}');
+            const language = JSON.parse(process.env.LANGUAGE_PROFILE_JSON || '{}');
+            const mapLabel = (name) => safeString(labelMap[name] || name, 100);
+
+            const result = {
+              summary: safeString(parsed.summary, 180) || String(language.normalize_summary_fallback || 'Automatic analysis completed, but maintainers should still review the context before making a final decision.'),
+              category: allowedCategories.has(String(parsed.category || '').toLowerCase())
+                ? String(parsed.category).toLowerCase()
+                : 'question',
+              disposition: allowedDispositions.has(String(parsed.disposition || '').toLowerCase())
+                ? String(parsed.disposition).toLowerCase()
+                : 'none',
+              needsInfo: Boolean(parsed.needsInfo),
+              infoAssessment: safeString(parsed.infoAssessment, 220) || String(language.normalize_info_fallback || 'The current information appears sufficient for an initial analysis.'),
+              supplementSuggestions: Array.isArray(parsed.supplementSuggestions)
+                ? parsed.supplementSuggestions.map(item => safeString(item, 120)).filter(Boolean).slice(0, 3)
+                : [],
+              titleSuggestion: safeString(parsed.titleSuggestion, 120),
+              duplicateOf: parsed.duplicateOf == null ? null : Number(parsed.duplicateOf),
+              confidence: Number(parsed.confidence)
+            };
+
+            if (!Number.isFinite(result.confidence)) {
+              result.confidence = 0.65;
+            }
+            result.confidence = Math.max(0, Math.min(1, result.confidence));
+
+            if (result.disposition !== 'none') {
+              result.needsInfo = false;
+              result.supplementSuggestions = [];
+            }
+
+            if (result.disposition === 'duplicate') {
+              if (!Number.isFinite(result.duplicateOf) || !openIssueNumbers.has(result.duplicateOf)) {
+                result.disposition = 'none';
+                result.duplicateOf = null;
+              }
+            } else {
+              result.duplicateOf = null;
+            }
+
+            const canonicalLabels = [];
+            if (result.disposition !== 'none') {
+              canonicalLabels.push(result.disposition);
+            } else {
+              canonicalLabels.push(result.category);
+              if (result.needsInfo) {
+                canonicalLabels.push('needs-info');
+              }
+            }
+
+            result.canonicalLabels = canonicalLabels;
+            result.labels = Array.from(new Set(canonicalLabels.map(mapLabel).filter(Boolean)));
+
+            core.setOutput('ok', 'true');
+            core.setOutput('json', JSON.stringify(result));
+            core.setOutput('labels', JSON.stringify(result.labels));
+            core.setOutput('category', result.category);
+            core.setOutput('disposition', result.disposition);
+            core.setOutput('needs_info', result.needsInfo ? 'true' : 'false');
+            core.setOutput('error', '');
+          } catch (error) {
+            fail(error.message || error);
+          }
+
+    - name: Apply analysis labels
+      if: ${{ steps.prepare.outputs.should_run == 'true' && steps.normalize.outputs.ok == 'true' }}
+      uses: actions/github-script@v7
+      env:
+        TRIAGE_RESULT: ${{ steps.normalize.outputs.json }}
+        LABEL_MAP_JSON: ${{ steps.resolve.outputs.label_map_json }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const issueNumber = Number(context.payload.issue.number);
+
+          const latestIssue = await github.rest.issues.get({
+            owner,
+            repo,
+            issue_number: issueNumber
+          });
+          const issue = latestIssue.data;
+
+          const result = JSON.parse(process.env.TRIAGE_RESULT);
+          const labelMap = JSON.parse(process.env.LABEL_MAP_JSON || '{}');
+
+          const managedCanonicalLabels = ['bug', 'question', 'enhancement', 'documentation', 'duplicate', 'needs-info'];
+          const managedLabels = Array.from(
+            new Set(
+              managedCanonicalLabels
+                .map(name => String(labelMap[name] || name).trim())
+                .filter(Boolean)
+                .map(name => name.toLowerCase())
+            )
+          );
+          const desiredLabels = new Set((Array.isArray(result.labels) ? result.labels : []).map(label => String(label).toLowerCase()));
+          const currentLabels = (issue.labels || []).map(label =>
+            String(typeof label === 'string' ? label : label.name || '')
+          );
+
+          const removeIfExists = async (name) => {
+            try {
+              await github.rest.issues.removeLabel({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                name
+              });
+            } catch (error) {
+              core.info(`Skip removing label ${name}: ${error.message}`);
+            }
+          };
+
+          for (const name of currentLabels) {
+            const lower = name.toLowerCase();
+            const isManaged = managedLabels.includes(lower);
+            if (isManaged && !desiredLabels.has(lower)) {
+              await removeIfExists(name);
+            }
+          }
+
+          const missingLabels = Array.from(desiredLabels).filter(name =>
+            !currentLabels.some(current => current.toLowerCase() === name.toLowerCase())
+          );
+
+          if (missingLabels.length > 0) {
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: issueNumber,
+              labels: missingLabels
+            });
+          }
+
+    - name: Publish analysis comment
+      if: ${{ steps.prepare.outputs.should_run == 'true' && steps.normalize.outputs.ok == 'true' }}
+      uses: actions/github-script@v7
+      env:
+        TRIAGE_RESULT: ${{ steps.normalize.outputs.json }}
+        COMMENT_ID: ${{ steps.prepare.outputs.comment_id }}
+        LANGUAGE_PROFILE_JSON: ${{ steps.resolve.outputs.language_profile_json }}
+        RERUN_LABELS_JSON: ${{ steps.resolve.outputs.rerun_labels_json }}
+        COMMENT_MARKER: ${{ inputs.comment-marker }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const issueNumber = Number(context.payload.issue.number);
+          const commentId = Number(process.env.COMMENT_ID || 0);
+          const result = JSON.parse(process.env.TRIAGE_RESULT);
+          const language = JSON.parse(process.env.LANGUAGE_PROFILE_JSON || '{}');
+          const rerunLabels = JSON.parse(process.env.RERUN_LABELS_JSON || '[]');
+          const t = (key, fallback = '') => String(language[key] || fallback);
+          const formatRerunLabels = (labels, code) => {
+            const items = labels.map(label => `\`${label}\``);
+            if (items.length === 0) return '`ai-rerun`';
+            if (items.length === 1) return items[0];
+            if (code === 'zh') return items.join('、');
+            if (items.length === 2) return `${items[0]} or ${items[1]}`;
+            return `${items.slice(0, -1).join(', ')}, or ${items[items.length - 1]}`;
+          };
+          const renderTemplate = (value) =>
+            String(value || '').replace(/\{\{rerun_labels\}\}/g, formatRerunLabels(rerunLabels, String(language.code || 'en')));
+          const commentMarker = String(process.env.COMMENT_MARKER || '<!-- issue-ai-analyze -->').trim() || '<!-- issue-ai-analyze -->';
+
+          const lines = [
+            t('analysis_title', '## 🤖 AI Initial Analysis'),
+            '',
+            `- **${t('summary_label', 'Summary')}**: ${result.summary}`,
+            `- **${t('suggested_labels_label', 'Suggested labels')}**: ${result.labels.map(label => `\`${label}\``).join(' ') || t('comment_none_label', '(none)')}`,
+            `- **${t('suggested_title_label', 'Suggested title')}**: ${result.titleSuggestion || context.payload.issue.title}`,
+            `- **${t('info_assessment_label', 'Information assessment')}**: ${result.infoAssessment}`,
+            `- **${t('confidence_label', 'Confidence')}**: ${Math.round(Number(result.confidence || 0) * 100)}%`
+          ];
+
+          if (result.duplicateOf) {
+            lines.push(`- **${t('duplicate_of_label', 'Possible duplicate of')}**: #${result.duplicateOf}`);
+          }
+
+          if (Array.isArray(result.supplementSuggestions) && result.supplementSuggestions.length > 0) {
+            lines.push('');
+            lines.push(result.needsInfo ? t('suggestions_heading_needed', '### Suggested follow-up') : t('suggestions_heading_optional', '### Optional follow-up'));
+            for (const item of result.supplementSuggestions) {
+              lines.push(`- ${item}`);
+            }
+          }
+
+          lines.push('');
+          lines.push(t('sync_note', 'The suggested labels above have already been synced to this issue. Developers can still adjust them manually.'));
+          lines.push(t('rerun_intro', 'If more information is added later:'));
+          lines.push(t('rerun_needs_info', '- When the issue author replies while `needs-info` is present, I will rerun automatically.'));
+          lines.push(renderTemplate(t('rerun_manual_template', '- Developers or the issue author can also comment {{rerun_commands}} to rerun manually.')));
+          lines.push('');
+          lines.push(commentMarker);
+
+          await github.rest.issues.updateComment({
+            owner,
+            repo,
+            comment_id: commentId,
+            body: lines.join('\n')
+          });
+
+    - name: Publish fallback comment
+      if: ${{ steps.prepare.outputs.should_run == 'true' && steps.normalize.outputs.ok != 'true' }}
+      uses: actions/github-script@v7
+      env:
+        COMMENT_ID: ${{ steps.prepare.outputs.comment_id }}
+        TRIAGE_ERROR: ${{ steps.normalize.outputs.error }}
+        LANGUAGE_PROFILE_JSON: ${{ steps.resolve.outputs.language_profile_json }}
+        RERUN_LABELS_JSON: ${{ steps.resolve.outputs.rerun_labels_json }}
+        COMMENT_MARKER: ${{ inputs.comment-marker }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const commentId = Number(process.env.COMMENT_ID || 0);
+          const reason = String(process.env.TRIAGE_ERROR || 'unknown-error')
+            .replace(/`/g, '\\`')
+            .slice(0, 1000);
+          const language = JSON.parse(process.env.LANGUAGE_PROFILE_JSON || '{}');
+          const rerunLabels = JSON.parse(process.env.RERUN_LABELS_JSON || '[]');
+          const t = (key, fallback = '') => String(language[key] || fallback);
+          const formatRerunLabels = (labels, code) => {
+            const items = labels.map(label => `\`${label}\``);
+            if (items.length === 0) return '`ai-rerun`';
+            if (items.length === 1) return items[0];
+            if (code === 'zh') return items.join('、');
+            if (items.length === 2) return `${items[0]} or ${items[1]}`;
+            return `${items.slice(0, -1).join(', ')}, or ${items[items.length - 1]}`;
+          };
+          const renderTemplate = (value) =>
+            String(value || '').replace(/\{\{rerun_labels\}\}/g, formatRerunLabels(rerunLabels, String(language.code || 'en')));
+          const commentMarker = String(process.env.COMMENT_MARKER || '<!-- issue-ai-analyze -->').trim() || '<!-- issue-ai-analyze -->';
+
+          const body = [
+            t('fallback_title', '## ⚠️ AI Analysis Failed'),
+            '',
+            t('fallback_body', 'This automatic analysis did not complete successfully. The cause may be model access failure, invalid output format, or a temporary network problem.'),
+            `- **${t('diagnostic_label', 'Diagnostic')}**: \`${reason}\``,
+            '',
+            renderTemplate(t('fallback_retry_template', 'You can edit the issue later, or comment {{rerun_commands}} to try again.')),
+            t('fallback_manual', 'Developers can also apply labels manually without blocking normal issue handling.'),
+            '',
+            commentMarker
+          ].join('\n');
+
+          await github.rest.issues.updateComment({
+            owner,
+            repo,
+            comment_id: commentId,
+            body
+          });

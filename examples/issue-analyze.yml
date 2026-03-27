@@ -1,0 +1,35 @@
+name: AI Issue Assistant
+
+on:
+  issues:
+    types:
+      - opened
+      - reopened
+      - edited
+      - labeled
+  issue_comment:
+    types:
+      - created
+
+permissions:
+  contents: read
+  issues: write
+  models: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: issue-ai-analyze-${{ github.repository }}-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Analyze issue with AI
+        uses: mingzaily/issue-ai-analyze@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          label-map-file: ./.github/issue-ai-label-map.yml
+          model: openai/gpt-4.1
+          language: zh

@@ -1,0 +1,123 @@
+messages:
+  - role: system
+    content: >-
+      You are a GitHub issue analysis assistant. Output only JSON that matches
+      the JSON Schema. Do not output markdown code fences, explanations, or any
+      extra text.
+
+      All natural-language fields must be written in {{output_language_name}}.
+
+      Your goals:
+      1. Summarize the core issue in 1 to 2 sentences.
+      2. Choose one category from bug, question, enhancement, documentation.
+      3. Choose one disposition from duplicate, none.
+      4. Decide whether the issue is missing critical information that blocks next
+      steps.
+      5. Suggest a clearer title.
+      6. Provide an information assessment and up to 3 supplement suggestions.
+
+      Rules:
+      - Only set disposition to duplicate when the open issues summary contains
+      an obviously matching issue.
+      - If disposition is duplicate, duplicateOf must be the matching issue
+      number.
+      - If you cannot confidently point to an open issue, do not mark it as
+      duplicate.
+      - If disposition is not none, needsInfo must be false and
+      supplementSuggestions must be an empty array.
+      - Set needsInfo to true only when key information is clearly missing and
+      blocks further handling.
+      - supplementSuggestions must be short, concrete, and low-friction. Do not
+      ask for overly specialized material.
+      - titleSuggestion must be concise and neutral, without prefixes such as bug
+      or question.
+      - confidence must be a decimal number between 0 and 1.
+      - If the issue is already clear enough, do not ask for extra information
+      just to sound thorough.
+  - role: user
+    content: |-
+      Trigger reason:
+      {{trigger_reason}}
+
+      Current labels:
+      {{current_labels}}
+
+      Issue title:
+      {{issue_title}}
+
+      Issue body:
+      {{issue_body}}
+
+      Recent discussion:
+      {{recent_comments}}
+
+      Current open issues summary (for duplicate detection only):
+      {{open_issues}}
+
+model: openai/gpt-4.1
+responseFormat: json_schema
+jsonSchema: |-
+  {
+    "name": "issue_analysis_result",
+    "strict": true,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "summary": {
+          "type": "string",
+          "description": "Short issue summary in 1 to 2 sentences."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["bug", "question", "enhancement", "documentation"]
+        },
+        "disposition": {
+          "type": "string",
+          "enum": ["duplicate", "none"]
+        },
+        "needsInfo": {
+          "type": "boolean"
+        },
+        "infoAssessment": {
+          "type": "string",
+          "description": "Assessment of whether the current information is sufficient."
+        },
+        "supplementSuggestions": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "string"
+          }
+        },
+        "titleSuggestion": {
+          "type": "string",
+          "description": "A clearer suggested title without bug or question prefixes."
+        },
+        "duplicateOf": {
+          "type": ["number", "null"]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "summary",
+        "category",
+        "disposition",
+        "needsInfo",
+        "infoAssessment",
+        "supplementSuggestions",
+        "titleSuggestion",
+        "duplicateOf",
+        "confidence"
+      ]
+    }
+  }
+modelParameters:
+  temperature: 0.1
+  maxCompletionTokens: 900
+testData: []
+evaluators: []
