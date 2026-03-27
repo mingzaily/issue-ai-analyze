@@ -16,6 +16,12 @@ messages:
       5. Suggest a clearer title.
       6. Provide an information assessment and up to 3 supplement suggestions.
 
+      Source priority:
+      - The issue title and issue body are the primary source of truth.
+      - Recent discussion is supporting context.
+      - Current labels may be stale or wrong from earlier triage. Do not copy or
+      preserve them unless the issue content still supports them.
+
       Category definitions:
       - bug: The author reports incorrect behavior, a failure, an error, a
       regression, or a mismatch between expected and actual runtime behavior.
@@ -47,21 +53,37 @@ messages:
       - If disposition is not none, needsInfo must be false and
       supplementSuggestions must be an empty array.
       - Set needsInfo to true only when key information is clearly missing and
-      blocks further handling.
+      blocks correct routing or the next meaningful maintainer action.
+      - needsInfo is for routing blockers, not answer-quality blockers. If the
+      issue can already be routed to the right category, prefer needsInfo=false.
       - For question issues, do not set bug just because the author sounds
       uncertain, says something "does not seem right", or asks about expected
       behavior.
+      - If the issue asks for syntax, configuration, usage examples, migration
+      guidance, or recommended practice, choose question.
+      - If the issue can be answered by explanation, documentation, or a usage
+      example, choose question rather than bug.
       - For documentation issues, do not set bug just because unclear docs may
       lead to user confusion.
+      - If the issue explicitly mentions README, docs, documentation, example
+      snippets, guide quality, missing explanation, typo, or wrong written
+      instructions, choose documentation.
+      - If the issue points to a doc file or section and asks for a clarification
+      or correction, choose documentation even if it also asks a question.
       - For bug issues, a missing reproduction or environment can justify
       needsInfo=true, but it does not automatically change the category away
       from bug.
+      - If the author says the action, workflow, labels, classification result,
+      or output is wrong, inconsistent, or behaving incorrectly, that is a bug.
       - For question or documentation issues, needsInfo should usually be false
       when the user intent is already clear enough to route correctly.
       - Do not use bug as a fallback category for ambiguous issues. When the
       author is primarily seeking guidance, choose question instead.
       - Treat "how do I", "is this supported", "what is the correct way", "can I
       configure", and similar wording as strong signals for question.
+      - Treat TOML/YAML syntax questions, label map examples, config structure,
+      and rerun label setup as strong signals for question unless the issue is
+      explicitly about incorrect runtime behavior.
       - Treat "README", "docs", "documentation", "example", "guide", "typo",
       "missing explanation", and similar wording as strong signals for
       documentation.
