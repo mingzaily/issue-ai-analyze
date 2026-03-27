@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Usage documentation
+    url: https://github.com/mingzaily/issue-ai-analyze/blob/master/README.md
+    about: Review the README and examples before opening a usage issue.
+  - name: 中文说明
+    url: https://github.com/mingzaily/issue-ai-analyze/blob/master/README.zh.md
+    about: 查看中文说明、示例和配置方式。

@@ -1,0 +1,67 @@
+name: Feature request
+description: 提交 issue-ai-analyze 的能力建议、行为改进或接口设计建议
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        使用这个表单提交功能建议，例如：
+        - 新的标签语义或映射能力
+        - 新的 rerun 触发方式
+        - 评论渲染策略改进
+        - 更多模型/接口兼容能力
+        - 更好的日志与可观测性
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决的问题
+      description: 先说明当前痛点
+      placeholder: 例如：当前无法直接从日志判断 .prompt.yml 最终生效的模型配置
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你建议的方案
+      description: 请说明希望新增或修改什么
+      placeholder: 例如：在 action 日志中显式输出 resolved model、response format 和 model parameters
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 替代方案
+      description: 如果你考虑过其他做法，也可以写在这里
+    validations:
+      required: false
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: 兼容性与影响范围
+      description: 这个建议是否可能影响现有输入、输出、标签或评论行为
+      placeholder: 例如：只增加日志，不改变现有行为
+    validations:
+      required: false
+
+  - type: textarea
+    id: example
+    attributes:
+      label: 示例或期望效果
+      description: 如有需要，请补充示例输出、伪代码或交互效果
+      render: markdown
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充说明
+      description: 其他相关信息
+    validations:
+      required: false

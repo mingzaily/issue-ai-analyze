@@ -13,7 +13,7 @@ jobs:
 
       - name: Validate YAML files
         run: |
-          ruby -e 'require "yaml"; YAML.load_file("action.yml"); YAML.load_file("prompts/general.prompt.yml"); YAML.load_file("examples/issue-analyze.yml"); YAML.load_file("examples/label-map.yml"); YAML.load_file(".github/issue-ai-label-map.yml"); YAML.load_file(".github/workflows/issue.yml"); puts "yaml ok"'
+          ruby -e 'require "yaml"; YAML.load_file("action.yml"); YAML.load_file("prompts/general.prompt.yml"); YAML.load_file("examples/issue-analyze.yml"); YAML.load_file("examples/label-map.yml"); YAML.load_file(".github/issue-ai-label-map.yml"); YAML.load_file(".github/workflows/issue.yml"); YAML.load_file(".github/ISSUE_TEMPLATE/bug_report.yml"); YAML.load_file(".github/ISSUE_TEMPLATE/document.yml"); YAML.load_file(".github/ISSUE_TEMPLATE/feature_request.yml"); YAML.load_file(".github/ISSUE_TEMPLATE/question.yml"); YAML.load_file(".github/ISSUE_TEMPLATE/config.yml"); puts "yaml ok"'
 
       - name: Validate prompt rendering
         run: |

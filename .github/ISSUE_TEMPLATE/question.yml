@@ -1,0 +1,77 @@
+name: Question
+description: 咨询 action 用法、配置方式、标签管理或模型接入问题
+title: "[Question] "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        如果你不确定该提 bug 还是 feature，先用这个表单即可。
+
+        适合提交的问题包括：
+        - 如何接入 issue-ai-analyze
+        - label-map / label-map-file 怎么写
+        - rerun 标签怎么配置
+        - GitHub Models 和 OpenAI-compatible 怎么切换
+        - prompt-file 应该如何自定义
+
+  - type: textarea
+    id: question
+    attributes:
+      label: 问题内容
+      description: 请尽量具体描述你想确认的点
+      placeholder: 例如：label-map-file 使用 TOML 时，rerun 推荐写成字符串还是数组？
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_setup
+    attributes:
+      label: 当前配置或使用场景
+      description: 请说明你现在怎么接入、在哪个场景下遇到问题
+      placeholder: 例如：我在自己的仓库里用 GitHub Models 接入，label map 写在 .github/issue-ai-label-map.yml
+    validations:
+      required: false
+
+  - type: textarea
+    id: attempted
+    attributes:
+      label: 已尝试的方式
+      description: 如果你已经试过某些配置或查过文档，可以写在这里
+      placeholder: 例如：我已经看过 README 和 examples/issue-analyze.yml，但仍不确定 rerun 的推荐写法
+    validations:
+      required: false
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: 相关 workflow 或配置片段
+      description: 如有必要，请贴出最小相关配置
+      render: yaml
+    validations:
+      required: false
+
+  - type: input
+    id: action_version
+    attributes:
+      label: Action 版本
+      placeholder: 例如：v1 / master
+    validations:
+      required: false
+
+  - type: input
+    id: model_provider
+    attributes:
+      label: 模型与提供方
+      placeholder: 例如：GitHub Models / openai-gpt-4.1
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充说明
+      description: 其他你觉得有帮助的信息
+    validations:
+      required: false

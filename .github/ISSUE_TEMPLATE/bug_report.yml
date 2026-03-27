@@ -1,0 +1,110 @@
+name: Bug report
+description: 报告 issue-ai-analyze 的错误行为、工作流异常或集成问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        使用这个表单提交 action 本身的问题，例如：
+        - 标签分类明显错误
+        - 评论更新逻辑异常
+        - rerun 行为不符合预期
+        - prompt 渲染失败
+        - GitHub Models / OpenAI-compatible 接入异常
+
+        信息越完整，越容易快速定位。
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 问题概述
+      description: 简要说明哪里出错了
+      placeholder: 例如：使用 .prompt.yml 时日志显示成功，但最终标签被错误地打成 duplicate
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 请尽量提供稳定的复现方式
+      placeholder: |-
+        1. 在工作流中使用 issue-ai-analyze
+        2. 配置 prompt-file 和 label-map-file
+        3. 新建或重跑某个 issue
+        4. 观察实际标签、评论或日志
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+      description: 你原本希望发生什么
+      placeholder: 例如：应该打上 question，而不是 duplicate
+    validations:
+      required: false
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 实际发生了什么
+      placeholder: 例如：最终被打上 duplicate，且评论内容与 issue 本身不匹配
+    validations:
+      required: false
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: 相关 workflow 片段
+      description: 请贴出最小可复现配置
+      render: yaml
+    validations:
+      required: false
+
+  - type: textarea
+    id: prompt_or_mapping
+    attributes:
+      label: Prompt 或 label map 片段
+      description: 如问题和 prompt、label-map、label-map-file 有关，请贴出相关配置
+      render: yaml
+    validations:
+      required: false
+
+  - type: input
+    id: action_version
+    attributes:
+      label: Action 版本
+      description: 请填写使用的版本、分支或 commit
+      placeholder: 例如：v1 / master / 06e7423
+    validations:
+      required: false
+
+  - type: input
+    id: model_provider
+    attributes:
+      label: 模型与提供方
+      description: 如果知道，请填写本次使用的模型链路
+      placeholder: 例如：GitHub Models / openai-gpt-4.1，或 DeepSeek / deepseek-chat
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志或报错
+      description: 请粘贴关键工作流日志、报错信息或模型返回内容
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充说明
+      description: 其他有助于定位的信息
+    validations:
+      required: false

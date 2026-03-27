@@ -1,0 +1,57 @@
+name: Documentation
+description: 报告 README、示例、配置说明或文档表述问题
+title: "[Docs] "
+labels:
+  - documentation
+body:
+  - type: markdown
+    attributes:
+      value: |
+        使用这个表单提交文档相关问题，例如：
+        - README 说明遗漏
+        - 示例配置错误
+        - 输入输出描述不准确
+        - 中英文文档不一致
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 文档问题概述
+      description: 请说明哪里有问题
+      placeholder: 例如：README 里没有说明 label-map-file 可以使用 TOML
+    validations:
+      required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: 文档位置
+      description: 请尽量提供文件、章节或链接
+      placeholder: 例如：README.zh.md / 输入参数 / label-map-file
+    validations:
+      required: false
+
+  - type: textarea
+    id: current_content
+    attributes:
+      label: 当前内容或现象
+      description: 如有必要，请贴出当前文档内容
+    validations:
+      required: false
+
+  - type: textarea
+    id: suggested_change
+    attributes:
+      label: 建议修改
+      description: 你希望文档如何修正或补充
+      placeholder: 例如：补充一个最小 TOML 示例，并说明 rerun 推荐写成数组
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充说明
+      description: 其他相关信息
+    validations:
+      required: false
