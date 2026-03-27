@@ -99,7 +99,7 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        export RESOLVED_PROMPT_FILE="$RUNNER_TEMP/issue-ai-analyze-prompt-${GITHUB_RUN_ID}-${GITHUB_ACTION}.yml"
+        export RESOLVED_PROMPT_FILE="$RUNNER_TEMP/issue-ai-analyze-prompt-${GITHUB_RUN_ID}-${GITHUB_ACTION}.prompt.yml"
         ruby <<'RUBY'
         require 'json'
         require 'yaml'
@@ -407,15 +407,8 @@ runs:
           const mappedNeedsInfo = String(labelMap['needs-info'] || 'needs-info').trim().toLowerCase();
           const normalizedRerunLabels = new Set(rerunLabels.map(label => String(label || '').trim().toLowerCase()).filter(Boolean));
 
-          const promptBlockIndent = '      ';
-          const toPromptFileValue = (value) =>
-            [
-              '',
-              ...String(value || '')
-                .replace(/\r\n/g, '\n')
-                .split('\n')
-                .map(line => (line ? `${promptBlockIndent}${line}` : ''))
-            ].join('\n');
+          const normalizePromptText = (value, fallback = '') =>
+            String(value == null || value === '' ? fallback : value).replace(/\r\n/g, '\n');
 
           const owner = context.repo.owner;
           const repo = context.repo.repo;
@@ -594,9 +587,9 @@ runs:
           const openIssuesFile = path.join(baseDir, `issue-${issueNumber}-open-issues.txt`);
           const commentsFile = path.join(baseDir, `issue-${issueNumber}-comments.txt`);
 
-          fs.writeFileSync(bodyFile, toPromptFileValue(issue.body || '（无正文）'));
-          fs.writeFileSync(openIssuesFile, toPromptFileValue(openIssueSummary));
-          fs.writeFileSync(commentsFile, toPromptFileValue(recentComments));
+          fs.writeFileSync(bodyFile, normalizePromptText(issue.body, '（无正文）'));
+          fs.writeFileSync(openIssuesFile, normalizePromptText(openIssueSummary));
+          fs.writeFileSync(commentsFile, normalizePromptText(recentComments));
 
           const currentLabels = (issue.labels || [])
             .map(label => String(typeof label === 'string' ? label : label.name || '').trim())
