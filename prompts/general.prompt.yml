@@ -16,6 +16,27 @@ messages:
       5. Suggest a clearer title.
       6. Provide an information assessment and up to 3 supplement suggestions.
 
+      Category definitions:
+      - bug: The author reports incorrect behavior, a failure, an error, a
+      regression, or a mismatch between expected and actual runtime behavior.
+      - question: The author is asking how to use, configure, understand, or
+      verify something. Usage questions, design questions, and "is this the
+      right way?" discussions are questions, not bugs.
+      - enhancement: The author proposes a new capability, API improvement, or
+      behavioral change that does not already exist.
+      - documentation: The author reports missing, unclear, outdated, or
+      incorrect documentation, examples, guides, or README content.
+
+      Decision order:
+      1. If the issue is mainly about docs, examples, README, guides, or API
+      documentation quality, choose documentation.
+      2. Otherwise, if the issue is mainly asking how to do something, whether a
+      configuration is correct, or what the recommended usage is, choose
+      question.
+      3. Otherwise, if it proposes a new feature or API change, choose
+      enhancement.
+      4. Otherwise, if it reports broken or incorrect behavior, choose bug.
+
       Rules:
       - Only set disposition to duplicate when the open issues summary contains
       an obviously matching issue.
@@ -27,6 +48,26 @@ messages:
       supplementSuggestions must be an empty array.
       - Set needsInfo to true only when key information is clearly missing and
       blocks further handling.
+      - For question issues, do not set bug just because the author sounds
+      uncertain, says something "does not seem right", or asks about expected
+      behavior.
+      - For documentation issues, do not set bug just because unclear docs may
+      lead to user confusion.
+      - For bug issues, a missing reproduction or environment can justify
+      needsInfo=true, but it does not automatically change the category away
+      from bug.
+      - For question or documentation issues, needsInfo should usually be false
+      when the user intent is already clear enough to route correctly.
+      - Do not use bug as a fallback category for ambiguous issues. When the
+      author is primarily seeking guidance, choose question instead.
+      - Treat "how do I", "is this supported", "what is the correct way", "can I
+      configure", and similar wording as strong signals for question.
+      - Treat "README", "docs", "documentation", "example", "guide", "typo",
+      "missing explanation", and similar wording as strong signals for
+      documentation.
+      - Treat "error", "panic", "returns 500", "crash", "unexpected result",
+      "regression", and explicit expected-vs-actual mismatch as strong signals
+      for bug.
       - supplementSuggestions must be short, concrete, and low-friction. Do not
       ask for overly specialized material.
       - titleSuggestion must be concise and neutral, without prefixes such as bug
@@ -34,6 +75,9 @@ messages:
       - confidence must be a decimal number between 0 and 1.
       - If the issue is already clear enough, do not ask for extra information
       just to sound thorough.
+      - Ignore test prefixes such as [测试], [BUG], [Question], or [Doc] in the
+      title when they conflict with the actual issue content. Classify by the
+      substance of the title and body.
   - role: user
     content: |-
       Trigger reason:
@@ -117,7 +161,7 @@ jsonSchema: |-
     }
   }
 modelParameters:
-  temperature: 0.1
+  temperature: 0.0
   maxCompletionTokens: 900
 testData: []
 evaluators: []
