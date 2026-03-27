@@ -287,6 +287,21 @@ runs:
         prompt['model'] = model_override unless model_override.empty?
         File.write(ENV.fetch('RESOLVED_PROMPT_FILE'), YAML.dump(prompt))
 
+        detect_placeholder_indent = lambda do |placeholder|
+          pattern = /\A(\s*)\{\{#{Regexp.escape(placeholder)}\}\}\s*\z/
+          File.foreach(ENV.fetch('RESOLVED_PROMPT_FILE')) do |line|
+            match = line.match(pattern)
+            return match[1] if match
+          end
+          '    '
+        end
+
+        file_input_indent_map = {
+          'issue_body' => detect_placeholder_indent.call('issue_body'),
+          'recent_comments' => detect_placeholder_indent.call('recent_comments'),
+          'open_issues' => detect_placeholder_indent.call('open_issues')
+        }
+
         default_label_map = {
           'bug' => 'bug',
           'question' => 'question',
@@ -375,6 +390,7 @@ runs:
           f.puts("label_map_json=#{JSON.generate(normalized_label_map)}")
           f.puts("language_profile_json=#{JSON.generate(language_profile)}")
           f.puts("rerun_labels_json=#{JSON.generate(rerun_labels)}")
+          f.puts("file_input_indent_json=#{JSON.generate(file_input_indent_map)}")
           f.puts("language=#{normalized_language}")
           f.puts("use_custom_endpoint=#{endpoint.empty? ? 'false' : 'true'}")
           f.puts("transport=#{transport}")
@@ -388,6 +404,7 @@ runs:
         LABEL_MAP_JSON: ${{ steps.resolve.outputs.label_map_json }}
         LANGUAGE_PROFILE_JSON: ${{ steps.resolve.outputs.language_profile_json }}
         RERUN_LABELS_JSON: ${{ steps.resolve.outputs.rerun_labels_json }}
+        FILE_INPUT_INDENT_JSON: ${{ steps.resolve.outputs.file_input_indent_json }}
         COMMENT_MARKER: ${{ inputs.comment-marker }}
         RECENT_COMMENTS_LIMIT: ${{ inputs.recent-comments-limit }}
         OPEN_ISSUES_LIMIT: ${{ inputs.open-issues-limit }}
@@ -400,6 +417,7 @@ runs:
           const labelMap = JSON.parse(process.env.LABEL_MAP_JSON || '{}');
           const language = JSON.parse(process.env.LANGUAGE_PROFILE_JSON || '{}');
           const rerunLabels = JSON.parse(process.env.RERUN_LABELS_JSON || '[]');
+          const fileInputIndentMap = JSON.parse(process.env.FILE_INPUT_INDENT_JSON || '{}');
           const t = (key, fallback = '') => String(language[key] || fallback);
           const commentMarker = String(process.env.COMMENT_MARKER || '<!-- issue-ai-analyze -->').trim() || '<!-- issue-ai-analyze -->';
           const recentCommentsLimit = Math.max(1, Number(process.env.RECENT_COMMENTS_LIMIT || '10'));
@@ -409,6 +427,13 @@ runs:
 
           const normalizePromptText = (value, fallback = '') =>
             String(value == null || value === '' ? fallback : value).replace(/\r\n/g, '\n');
+          const formatPromptFileValue = (value, indent, fallback = '') => {
+            const normalized = normalizePromptText(value, fallback);
+            const lines = normalized.split('\n');
+            return lines
+              .map((line, index) => (index === 0 ? line : `${indent}${line}`))
+              .join('\n');
+          };
 
           const owner = context.repo.owner;
           const repo = context.repo.repo;
@@ -587,9 +612,18 @@ runs:
           const openIssuesFile = path.join(baseDir, `issue-${issueNumber}-open-issues.txt`);
           const commentsFile = path.join(baseDir, `issue-${issueNumber}-comments.txt`);
 
-          fs.writeFileSync(bodyFile, normalizePromptText(issue.body, '（无正文）'));
-          fs.writeFileSync(openIssuesFile, normalizePromptText(openIssueSummary));
-          fs.writeFileSync(commentsFile, normalizePromptText(recentComments));
+          fs.writeFileSync(
+            bodyFile,
+            formatPromptFileValue(issue.body, String(fileInputIndentMap.issue_body || '    '), '（无正文）')
+          );
+          fs.writeFileSync(
+            openIssuesFile,
+            formatPromptFileValue(openIssueSummary, String(fileInputIndentMap.open_issues || '    '))
+          );
+          fs.writeFileSync(
+            commentsFile,
+            formatPromptFileValue(recentComments, String(fileInputIndentMap.recent_comments || '    '))
+          );
 
           const currentLabels = (issue.labels || [])
             .map(label => String(typeof label === 'string' ? label : label.name || '').trim())

@@ -15,6 +15,44 @@ jobs:
         run: |
           ruby -e 'require "yaml"; YAML.load_file("action.yml"); YAML.load_file("prompts/general.prompt.yml"); YAML.load_file("examples/issue-analyze.yml"); YAML.load_file("examples/label-map.yml"); YAML.load_file(".github/issue-ai-label-map.yml"); YAML.load_file(".github/workflows/issue.yml"); puts "yaml ok"'
 
+      - name: Validate prompt rendering
+        run: |
+          ruby - <<'RUBY'
+          require 'yaml'
+
+          prompt = YAML.load_file('prompts/general.prompt.yml')
+          prompt['model'] = 'openai/gpt-4.1'
+          resolved = YAML.dump(prompt)
+
+          detect_indent = lambda do |placeholder|
+            pattern = /^\s*\{\{#{Regexp.escape(placeholder)}\}\}\s*$/
+            line = resolved.each_line.find { |value| value.match?(pattern) }
+            line ? line[/^\s*/] : '    '
+          end
+
+          format_multiline = lambda do |text, indent|
+            String(text)
+              .gsub("\r\n", "\n")
+              .split("\n")
+              .each_with_index
+              .map { |line, index| index.zero? ? line : "#{indent}#{line}" }
+              .join("\n")
+          end
+
+          replacements = {
+            '{{trigger_reason}}' => 'Issue title or body changed. Run the initial AI analysis again.',
+            '{{current_labels}}' => 'question, needs-info',
+            '{{issue_title}}' => '[Test] How should rerun be configured in TOML?',
+            '{{issue_body}}' => format_multiline.call("Line 1\n\nLine 3", detect_indent.call('issue_body')),
+            '{{recent_comments}}' => format_multiline.call("bot: previous result\nuser: added more context", detect_indent.call('recent_comments')),
+            '{{open_issues}}' => format_multiline.call("#12 | Similar question | labels=[question] | body=...", detect_indent.call('open_issues'))
+          }
+
+          rendered = replacements.reduce(resolved) { |content, (key, value)| content.gsub(key, value) }
+          YAML.safe_load(rendered, aliases: false)
+          puts 'prompt render ok'
+          RUBY
+
       - name: Validate TOML example
         run: |
           ruby - <<'RUBY'
