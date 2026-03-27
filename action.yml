@@ -1,5 +1,8 @@
 name: Issue AI Analyze
 description: Analyze GitHub issues with actions/ai-inference, apply mapped labels, and publish AI comments.
+branding:
+  icon: tag
+  color: blue
 
 inputs:
   github-token:
