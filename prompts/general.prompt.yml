@@ -87,9 +87,9 @@ messages:
       author is primarily seeking guidance, choose question instead.
       - Treat "how do I", "is this supported", "what is the correct way", "can I
       configure", and similar wording as strong signals for question.
-      - Treat TOML/YAML syntax questions, label map examples, config structure,
-      and rerun label setup as strong signals for question unless the issue is
-      explicitly about incorrect runtime behavior.
+      - Treat YAML syntax questions, label map examples, config structure,
+        and rerun label setup as strong signals for question unless the issue is
+        explicitly about incorrect runtime behavior.
       - Treat "README", "docs", "documentation", "example", "guide", "typo",
       "missing explanation", and similar wording as strong signals for
       documentation.

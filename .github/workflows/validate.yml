@@ -42,7 +42,7 @@ jobs:
           replacements = {
             '{{trigger_reason}}' => 'Issue title or body changed. Run the initial AI analysis again.',
             '{{current_labels}}' => 'question, needs-info',
-            '{{issue_title}}' => '[Test] How should rerun be configured in TOML?',
+            '{{issue_title}}' => '[Test] How should rerun be configured in YAML?',
             '{{issue_body}}' => format_multiline.call("Line 1\n\nLine 3", detect_indent.call('issue_body')),
             '{{recent_comments}}' => format_multiline.call("bot: previous result\nuser: added more context", detect_indent.call('recent_comments')),
             '{{open_issues}}' => format_multiline.call("#12 | Similar question | labels=[question] | body=...", detect_indent.call('open_issues'))
@@ -51,25 +51,4 @@ jobs:
           rendered = replacements.reduce(resolved) { |content, (key, value)| content.gsub(key, value) }
           YAML.safe_load(rendered, aliases: false)
           puts 'prompt render ok'
-          RUBY
-
-      - name: Validate TOML example
-        run: |
-          ruby - <<'RUBY'
-          content = File.read("examples/label-map.toml")
-          parsed = {}
-
-          content.each_line.with_index(1) do |line, line_number|
-            stripped = line.sub(/\s+#.*\z/, '').strip
-            next if stripped.empty?
-            abort("TOML tables are not supported in examples/label-map.toml:#{line_number}") if stripped.start_with?('[')
-
-            match = stripped.match(/\A([A-Za-z0-9._-]+)\s*=\s*(.+)\z/)
-            abort("Invalid TOML example entry at line #{line_number}") unless match
-
-            parsed[match[1]] = match[2]
-          end
-
-          abort('TOML example is empty') if parsed.empty?
-          puts 'toml ok'
           RUBY

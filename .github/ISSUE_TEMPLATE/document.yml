@@ -18,7 +18,7 @@ body:
     attributes:
       label: 文档问题概述
       description: 请说明哪里有问题
-      placeholder: 例如：README 里没有说明 label-map-file 可以使用 TOML
+      placeholder: 例如：README 里没有说明 label-map-file 只能使用 YAML
     validations:
       required: true
 
@@ -44,7 +44,7 @@ body:
     attributes:
       label: 建议修改
       description: 你希望文档如何修正或补充
-      placeholder: 例如：补充一个最小 TOML 示例，并说明 rerun 推荐写成数组
+      placeholder: 例如：补充一个最小 YAML 示例，并说明 rerun 推荐写成数组
     validations:
       required: false
 

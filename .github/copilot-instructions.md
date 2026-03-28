@@ -5,7 +5,7 @@ This repository publishes a composite GitHub Action. Treat changes to inputs, ou
 When writing or reviewing changes in this repository:
 
 - Keep the configuration surface small and explicit.
-- `label-map` is the simple inline form. `label-map-file` is the structured YAML or TOML form.
+- `label-map` is the simple inline form. `label-map-file` is the structured YAML form.
 - The bundled prompt lives at `prompts/general.prompt.yml`.
 - If user-facing behavior changes, update `action.yml`, `README.md`, `README.zh.md`, `examples/`, and `.github/workflows/validate.yml` together.
 - `README.md` must stay English. `README.zh.md` must stay Simplified Chinese. Keep both files aligned in meaning and neutral in tone.

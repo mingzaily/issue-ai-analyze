@@ -21,7 +21,7 @@ body:
     attributes:
       label: 问题内容
       description: 请尽量具体描述你想确认的点
-      placeholder: 例如：label-map-file 使用 TOML 时，rerun 推荐写成字符串还是数组？
+      placeholder: 例如：label-map-file 里的 rerun 推荐写成字符串还是数组？
     validations:
       required: true
 

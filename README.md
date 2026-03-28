@@ -1,20 +1,20 @@
 # issue-ai-analyze
 
-[GitHub](https://github.com/mingzaily/issue-ai-analyze) ｜ [简体中文说明](./README.zh.md)
+English | [中文](./README.zh.md)
 
 [![Validate](https://github.com/mingzaily/issue-ai-analyze/actions/workflows/validate.yml/badge.svg)](https://github.com/mingzaily/issue-ai-analyze/actions/workflows/validate.yml)
 [![Release](https://img.shields.io/github/v/release/mingzaily/issue-ai-analyze?display_name=tag)](https://github.com/mingzaily/issue-ai-analyze/releases)
 [![Stars](https://img.shields.io/github/stars/mingzaily/issue-ai-analyze?style=social)](https://github.com/mingzaily/issue-ai-analyze/stargazers)
 
-`issue-ai-analyze` is a GitHub Action for issue analysis.
+`issue-ai-analyze` is a GitHub Action for issue triage. It analyzes issue content with `actions/ai-inference`, normalizes the result into a small set of canonical labels, maps them to repository labels, and writes a structured analysis comment.
 
-It can:
+## What It Does
 
-- analyze issue content with `actions/ai-inference`
-- normalize the model output into canonical labels
+- classify issues into `bug`, `question`, `enhancement`, or `documentation`
+- surface possible duplicates and `needs-info` follow-up
 - map canonical labels to repository labels
-- publish and update AI analysis comments
-- use GitHub Models or an OpenAI-compatible endpoint
+- create or update a structured AI analysis comment
+- run with GitHub Models or an OpenAI-compatible endpoint
 
 ## Canonical Labels
 
@@ -38,7 +38,7 @@ Use `label-map` or `label-map-file` if your repository uses different label name
 | `model` | No | Model override for inference. |
 | `prompt-file` | No | Path to a custom prompt YAML file. Defaults to the bundled `prompts/general.prompt.yml`. |
 | `label-map` | No | Inline label mapping. Use one `key=value` entry per line. Use `rerun=` for rerun labels. |
-| `label-map-file` | No | Path to a YAML or TOML label management file. Overrides `label-map`. |
+| `label-map-file` | No | Path to a YAML label management file. Overrides `label-map`. |
 | `openai-compatible-endpoint` | No | Custom inference endpoint. Must be used with `openai-compatible-token`. |
 | `openai-compatible-token` | No | Token for the custom endpoint. |
 | `openai-compatible-headers` | No | Extra headers forwarded to `actions/ai-inference`. |
@@ -60,6 +60,9 @@ Use `label-map` or `label-map-file` if your repository uses different label name
 | `comment-id` | The AI comment created or updated during this run. |
 | `comment-strategy` | `replace_latest` or `new_comment`. |
 | `transport` | `github-models` or `openai-compatible`. |
+| `resolved-model` | Effective model resolved from the prompt file or action defaults. |
+| `resolved-response-format` | Effective response format resolved from the prompt file. |
+| `resolved-model-parameters` | Effective `modelParameters` object resolved from the prompt file, serialized as JSON. |
 
 ## Basic Usage
 
@@ -139,7 +142,7 @@ with:
     rerun=ai-rerun,ai-recheck
 ```
 
-Use `label-map-file` when you prefer a structured file.
+Use `label-map-file` when you prefer a structured YAML file.
 
 ```yaml
 bug: type/bug
@@ -153,17 +156,62 @@ rerun:
   - ai-recheck
 ```
 
-The same file can also be written as TOML:
+`label-map` and `label-map-file` rename the built-in canonical labels only. They do not add new canonical categories and do not map one canonical label to multiple repository labels.
 
-```toml
-bug = "type/bug"
-question = "type/question"
-enhancement = "type/feature"
-documentation = "type/docs"
-duplicate = "duplicate"
-needs-info = "needs-info"
-rerun = ["ai-rerun", "ai-recheck"]
+## Custom Label Extensions
+
+The built-in canonical labels are:
+
+- `bug`
+- `question`
+- `enhancement`
+- `documentation`
+- `duplicate`
+- `needs-info`
+
+This set is meant to cover a small, reusable triage layer. For many small repositories, it is enough on its own.
+
+If your repository also uses labels such as `area/*`, `priority/*`, or `status/*`, it is usually better to keep `issue-ai-analyze` focused on the canonical labels above and derive additional repository-specific labels in your workflow from the action outputs.
+
+```yaml
+- name: Analyze issue with AI
+  id: analyze
+  uses: mingzaily/issue-ai-analyze@v1
+  with:
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    label-map-file: ./.github/issue-ai-label-map.yml
+
+- name: Add repository-specific labels
+  if: ${{ steps.analyze.outputs.ok == 'true' }}
+  uses: actions/github-script@v7
+  with:
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    script: |
+      const labels = [];
+
+      if ("${{ steps.analyze.outputs.category }}" === "bug") {
+        labels.push("triaged");
+      }
+
+      if ("${{ steps.analyze.outputs.needs-info }}" === "true") {
+        labels.push("status/awaiting-author");
+      }
+
+      if ("${{ steps.analyze.outputs.disposition }}" === "duplicate") {
+        labels.push("status/duplicate");
+      }
+
+      if (labels.length > 0) {
+        await github.rest.issues.addLabels({
+          owner: context.repo.owner,
+          repo: context.repo.repo,
+          issue_number: context.payload.issue.number,
+          labels
+        });
+      }
 ```
+
+This approach keeps the action behavior predictable while still allowing larger repositories to add their own label conventions in a separate workflow step.
 
 ## Behavior
 

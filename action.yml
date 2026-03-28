@@ -1,5 +1,6 @@
 name: Issue AI Analyze
-description: Analyze GitHub issues with actions/ai-inference, apply mapped labels, and publish AI comments.
+author: mingzaily
+description: AI-assisted triage for GitHub issues with label mapping, duplicate hints, and structured comments.
 branding:
   icon: tag
   color: blue
@@ -25,7 +26,7 @@ inputs:
     required: false
     default: ""
   label-map-file:
-    description: Optional YAML or TOML file path for label management config. Supported keys are bug, question, enhancement, documentation, duplicate, needs-info, and rerun. Takes precedence over label-map.
+    description: Optional YAML file path for label management config. Supported keys are bug, question, enhancement, documentation, duplicate, needs-info, and rerun. Takes precedence over label-map.
     required: false
     default: ""
   openai-compatible-endpoint:
@@ -140,50 +141,15 @@ runs:
           parsed
         end
 
-        parse_toml_value = lambda do |raw, path, line_number|
-          value = raw.to_s.strip
-          if value.start_with?('[')
-            unless value.end_with?(']')
-              abort("Invalid TOML array in #{path}:#{line_number}")
-            end
-
-            inner = value[1...-1].to_s.strip
-            if inner.empty?
-              []
-            else
-              inner.split(',').map { |item| normalize_map_string.call(item) }.reject(&:empty?)
-            end
-          else
-            normalize_map_string.call(value)
-          end
-        end
-
         parse_label_map_file = lambda do |path|
           content = File.read(path)
           ext = File.extname(path).downcase
 
-          case ext
-          when '.toml'
-            parsed = {}
-            content.each_line.with_index(1) do |line, line_number|
-              stripped = line.sub(/\s+#.*\z/, '').strip
-              next if stripped.empty?
-
-              if stripped.start_with?('[')
-                abort("TOML tables are not supported in label-map-file: #{path}:#{line_number}")
-              end
-
-              match = stripped.match(/\A([A-Za-z0-9._-]+)\s*=\s*(.+)\z/)
-              unless match
-                abort("Invalid TOML label-map entry at #{path}:#{line_number}")
-              end
-
-              parsed[match[1]] = parse_toml_value.call(match[2], path, line_number)
-            end
-            parsed
-          else
-            YAML.safe_load(content, aliases: false) || {}
+          if ext != '.yml' && ext != '.yaml'
+            abort("label-map-file must be a YAML file: #{path}")
           end
+
+          YAML.safe_load(content, aliases: false) || {}
         end
 
         default_prompt = File.join(ENV.fetch('ACTION_PATH'), 'prompts', 'general.prompt.yml')
