@@ -135,7 +135,7 @@ function finalizeEnv(runMarker, labelSyncStatus = '') {
     MANAGED_LABELS: '',
     JOB_STATUS: 'cancelled',
     INFERENCE_CUSTOM_OUTCOME: 'cancelled',
-    INFERENCE_GITHUB_OUTCOME: '',
+    INFERENCE_COPILOT_OUTCOME: '',
     RECENT_COMMENTS_LIMIT: '10'
   };
 }

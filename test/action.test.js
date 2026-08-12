@@ -16,8 +16,10 @@ const runtime = [
 ].map(file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8')).join('\n');
 const resolver = fs.readFileSync(path.join(__dirname, '..', 'src', 'resolve.rb'), 'utf8');
 const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'issue.yml'), 'utf8');
+const exampleWorkflow = fs.readFileSync(path.join(__dirname, '..', 'examples', 'issue-analyze.yml'), 'utf8');
 const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
 const readmeZh = fs.readFileSync(path.join(__dirname, '..', 'README.zh.md'), 'utf8');
+const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 
 test('action keeps label synchronization and comment finalization separate', () => {
   assert.match(action, /id: apply_labels[\s\S]*continue-on-error: true[\s\S]*uses: actions\/github-script@/);
@@ -48,6 +50,14 @@ test('action keeps label synchronization and comment finalization separate', () 
   assert.match(action, /apply-labels\.js/);
   assert.match(action, /COMMENT_ID: \$\{\{ steps\.prepare\.outputs\.comment_id \}\}/);
   assert.match(action, /RUN_MARKER: \$\{\{ steps\.prepare\.outputs\.run_marker \}\}/);
+  assert.match(action, /Set up Node\.js for GitHub Copilot CLI/);
+  assert.match(action, /npm install --global --no-audit --no-fund @github\/copilot@latest/);
+  assert.match(action, /actions\/ai-inference@2c43c91ae16266ca159d311430343c67a5ffa222/);
+  assert.match(action, /actions\/ai-inference@b81b2afb8390ee6839b494a404766bef6493c7d9/);
+  assert.match(action, /GITHUB_TOKEN: \$\{\{ inputs\.github-token \}\}/);
+  assert.match(action, /TRANSPORT: \$\{\{ steps\.resolve\.outputs\.transport \}\}/);
+  assert.match(action, /steps\.install_copilot\.outcome == 'success'/);
+  assert.doesNotMatch(action, /inference_github_models/);
   assert.doesNotMatch(action, /name: Publish skipped analysis status/);
   assert.doesNotMatch(action, /name: Publish analysis comment/);
   assert.doesNotMatch(action, /name: Publish fallback comment/);
@@ -59,7 +69,16 @@ test('documentation describes rerun label isolation and every final comment stat
     assert.match(document, /rerun.*(?:different|不能与)/s);
     assert.match(document, /workflow_dispatch/);
     assert.match(document, /github\.event\.issue\.number \|\| inputs\.issue-number \|\| github\.run_id/);
+    assert.match(document, /copilot-requests: write/);
+    assert.match(document, /openai-compatible/);
+    assert.match(document, /GitHub Models.*retired|GitHub Models.*退役/s);
   }
+  for (const workflowDocument of [workflow, exampleWorkflow]) {
+    assert.doesNotMatch(workflowDocument, /models: read/);
+    assert.match(workflowDocument, /copilot-requests: write/);
+    assert.match(workflowDocument, /model: gpt-4\.1/);
+  }
+  assert.equal(packageJson.version, '1.2.0');
 });
 
 test('resolver rejects rerun labels that overlap mapped AI-managed labels', () => {
@@ -69,13 +88,15 @@ test('resolver rejects rerun labels that overlap mapped AI-managed labels', () =
     { encoding: 'utf8' }
   );
 
-  const runResolver = labelMap => {
+  const runResolver = (labelMap, overrides = {}) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue-ai-analyze-resolver-'));
+    const outputFile = path.join(tempDir, 'github-output');
+    const promptFile = path.join(tempDir, 'issue-ai-analyze-prompt-test-run-test-resolver.prompt.yml');
     const env = {
       ...process.env,
       ACTION_PATH: path.join(__dirname, '..'),
       GITHUB_ACTION: 'test-resolver',
-      GITHUB_OUTPUT: path.join(tempDir, 'github-output'),
+      GITHUB_OUTPUT: outputFile,
       GITHUB_RUN_ID: 'test-run',
       INPUT_LABEL_MAP: labelMap,
       INPUT_LABEL_MAP_FILE: '',
@@ -84,21 +105,55 @@ test('resolver rejects rerun labels that overlap mapped AI-managed labels', () =
       INPUT_MODEL: '',
       INPUT_OPENAI_COMPAT_ENDPOINT: '',
       INPUT_OPENAI_COMPAT_TOKEN: '',
-      RESOLVED_PROMPT_FILE: path.join(tempDir, 'resolved.prompt.yml'),
-      RUNNER_TEMP: tempDir
+      RESOLVED_PROMPT_FILE: promptFile,
+      RUNNER_TEMP: tempDir,
+      ...overrides
     };
 
     try {
-      return childProcess.execFileSync('bash', ['-e', '-c', resolver], {
+      const stdout = childProcess.execFileSync('bash', ['-e', '-c', resolver], {
         cwd: path.join(__dirname, '..'),
         env,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe']
       });
+      return {
+        stdout,
+        output: fs.readFileSync(outputFile, 'utf8'),
+        prompt: fs.readFileSync(promptFile, 'utf8')
+      };
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   };
+
+  const copilotResult = runResolver('bug=type/bug\nrerun=ai-rerun', {
+    INPUT_MODEL: 'openai/gpt-4.1'
+  });
+  assert.match(copilotResult.output, /transport=copilot/);
+  assert.match(copilotResult.output, /use_custom_endpoint=false/);
+  assert.match(copilotResult.output, /resolved_model=gpt-4\.1/);
+  assert.match(copilotResult.prompt, /model: gpt-4\.1/);
+  assert.doesNotMatch(copilotResult.prompt, /openai\/gpt-4\.1/);
+
+  const customResult = runResolver('bug=type/bug\nrerun=ai-rerun', {
+    INPUT_MODEL: 'deepseek-chat',
+    INPUT_OPENAI_COMPAT_ENDPOINT: 'https://example.test/v1',
+    INPUT_OPENAI_COMPAT_TOKEN: 'test-token'
+  });
+  assert.match(customResult.output, /transport=openai-compatible/);
+  assert.match(customResult.output, /use_custom_endpoint=true/);
+  assert.match(customResult.output, /resolved_model=deepseek-chat/);
+  assert.match(customResult.prompt, /model: deepseek-chat/);
+
+  assert.throws(
+    () => runResolver('bug=type/bug', { INPUT_MODEL: 'openai/azure/gpt-4.1' }),
+    error => error.status !== 0 && String(error.stderr).includes('cannot be converted')
+  );
+  assert.throws(
+    () => runResolver('bug=type/bug', { INPUT_OPENAI_COMPAT_ENDPOINT: 'https://example.test/v1' }),
+    error => error.status !== 0 && String(error.stderr).includes('must be set together')
+  );
 
   assert.doesNotThrow(() => runResolver('bug=type/bug\nrerun=ai-rerun'));
   assert.throws(

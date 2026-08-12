@@ -59,6 +59,7 @@ token = ENV['INPUT_OPENAI_COMPAT_TOKEN'].to_s.strip
 if endpoint.empty? ^ token.empty?
   abort('openai-compatible-endpoint and openai-compatible-token must be set together')
 end
+transport = endpoint.empty? ? 'copilot' : 'openai-compatible'
 
 prompt = YAML.load_file(prompt_source)
 unless prompt.is_a?(Hash)
@@ -173,10 +174,27 @@ end
 
 model_override = ENV['INPUT_MODEL'].to_s.strip
 prompt['model'] = model_override unless model_override.empty?
-File.write(ENV.fetch('RESOLVED_PROMPT_FILE'), YAML.dump(prompt))
-
 resolved_model = prompt['model'].to_s.strip
-resolved_model = 'openai/gpt-4o' if resolved_model.empty?
+
+if transport == 'copilot'
+  unless resolved_model.empty?
+    legacy_model_match = resolved_model.match(/\Aopenai\/(.+)\z/i)
+    if legacy_model_match
+      converted_model = legacy_model_match[1].to_s.strip
+      if converted_model.empty? || converted_model.include?('/')
+        abort("Model #{resolved_model.inspect} cannot be converted to a Copilot model name. Use a Copilot model such as gpt-4.1.")
+      end
+      resolved_model = converted_model
+    elsif resolved_model.include?('/')
+      abort("Model #{resolved_model.inspect} is not a supported Copilot model name. Use a Copilot model such as gpt-4.1; legacy openai/<model> names are converted automatically.")
+    end
+    prompt['model'] = resolved_model
+  else
+    prompt.delete('model')
+  end
+end
+
+File.write(ENV.fetch('RESOLVED_PROMPT_FILE'), YAML.dump(prompt))
 
 resolved_response_format = prompt['responseFormat'].to_s.strip
 resolved_model_parameters =
@@ -308,7 +326,6 @@ unless overlapping_ignore_rerun_labels.empty?
   abort("Rerun labels must not overlap ignore-label: #{overlapping_ignore_rerun_labels.join(', ')}")
 end
 
-transport = endpoint.empty? ? 'github-models' : 'openai-compatible'
 File.open(ENV.fetch('GITHUB_OUTPUT'), 'a') do |f|
   f.puts("resolved_prompt_file=#{ENV.fetch('RESOLVED_PROMPT_FILE')}")
   f.puts("label_map_json=#{JSON.generate(normalized_label_map)}")

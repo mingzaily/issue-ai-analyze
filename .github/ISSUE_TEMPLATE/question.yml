@@ -13,7 +13,7 @@ body:
         - 如何接入 issue-ai-analyze
         - label-map / label-map-file 怎么写
         - rerun 标签怎么配置
-        - GitHub Models 和 OpenAI-compatible 怎么切换
+        - GitHub Copilot CLI 和 OpenAI-compatible 怎么切换
         - prompt-file 应该如何自定义
 
   - type: textarea
@@ -30,7 +30,7 @@ body:
     attributes:
       label: 当前配置或使用场景
       description: 请说明你现在怎么接入、在哪个场景下遇到问题
-      placeholder: 例如：我在自己的仓库里用 GitHub Models 接入，label map 写在 .github/issue-ai-label-map.yml
+      placeholder: 例如：我在自己的仓库里用 GitHub Copilot CLI 接入，label map 写在 .github/issue-ai-label-map.yml
     validations:
       required: false
 
@@ -64,7 +64,7 @@ body:
     id: model_provider
     attributes:
       label: 模型与提供方
-      placeholder: 例如：GitHub Models / openai-gpt-4.1
+      placeholder: 例如：GitHub Copilot CLI / gpt-4.1
     validations:
       required: false
 

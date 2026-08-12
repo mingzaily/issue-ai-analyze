@@ -7,7 +7,7 @@ branding:
 
 inputs:
   github-token:
-    description: GitHub token with issue write permission. In most workflows this is just secrets.GITHUB_TOKEN.
+    description: "GitHub token with issues: write and, for the default Copilot transport, copilot-requests: write permission. In most workflows this is secrets.GITHUB_TOKEN."
     required: true
   issue-number:
     description: Optional issue number for workflow_dispatch or callers without an issue payload.
@@ -18,7 +18,7 @@ inputs:
     required: false
     default: ""
   model:
-    description: Optional model override written into the resolved prompt before inference.
+    description: Optional model override. Copilot accepts names such as gpt-4.1; legacy openai/<model> names are converted for the Copilot transport. Custom endpoints receive the configured model unchanged.
     required: false
     default: ""
   language:
@@ -34,7 +34,7 @@ inputs:
     required: false
     default: ""
   openai-compatible-endpoint:
-    description: Optional OpenAI-compatible endpoint. When set together with the token, GitHub Models is skipped.
+    description: Optional OpenAI-compatible endpoint. When set together with the token, the Copilot transport is skipped and the explicit compatibility transport is used.
     required: false
     default: ""
   openai-compatible-token:
@@ -42,7 +42,7 @@ inputs:
     required: false
     default: ""
   openai-compatible-headers:
-    description: Optional custom headers forwarded to actions/ai-inference.
+    description: Optional custom headers forwarded to the OpenAI-compatible inference action.
     required: false
     default: ""
   comment-marker:
@@ -107,10 +107,10 @@ outputs:
     description: Whether this run replaced the latest AI comment or created a new one.
     value: ${{ steps.prepare.outputs.comment_strategy }}
   transport:
-    description: Which inference transport was selected.
+    description: "Which inference transport was selected: copilot or openai-compatible."
     value: ${{ steps.resolve.outputs.transport }}
   resolved-model:
-    description: Effective model resolved from the prompt file or action defaults.
+    description: Effective model resolved from the prompt file or action defaults. Copilot model names are normalized before this output is written.
     value: ${{ steps.resolve.outputs.resolved_model }}
   resolved-response-format:
     description: Effective response format resolved from the prompt file.
@@ -151,7 +151,7 @@ runs:
 
     - name: Prepare issue context and pending comment
       id: prepare
-      uses: actions/github-script@e69ef5462fd455e02edcaf4dd7708eda96b9eda0 # v7.0.0
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
       env:
         INPUT_ISSUE_NUMBER: ${{ inputs.issue-number }}
         LABEL_MAP_JSON: ${{ steps.resolve.outputs.label_map_json }}
@@ -176,7 +176,23 @@ runs:
       shell: bash
       run: echo "issue analysis skipped for this event."
 
-    - name: Run AI inference with custom endpoint
+    - name: Set up Node.js for GitHub Copilot CLI
+      if: ${{ steps.prepare.outputs.should_run == 'true' && steps.resolve.outputs.use_custom_endpoint != 'true' }}
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.0.0
+      with:
+        node-version: 24
+
+    - name: Install GitHub Copilot CLI
+      if: ${{ steps.prepare.outputs.should_run == 'true' && steps.resolve.outputs.use_custom_endpoint != 'true' }}
+      id: install_copilot
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -euo pipefail
+        npm install --global --no-audit --no-fund @github/copilot@latest
+        copilot --version
+
+    - name: Run AI inference with OpenAI-compatible endpoint
       if: ${{ steps.prepare.outputs.should_run == 'true' && steps.resolve.outputs.use_custom_endpoint == 'true' }}
       id: inference_custom
       continue-on-error: true
@@ -196,11 +212,11 @@ runs:
         token: ${{ inputs.openai-compatible-token }}
         custom-headers: ${{ inputs.openai-compatible-headers }}
 
-    - name: Run AI inference with GitHub Models
-      if: ${{ steps.prepare.outputs.should_run == 'true' && steps.resolve.outputs.use_custom_endpoint != 'true' }}
-      id: inference_github_models
+    - name: Run AI inference with GitHub Copilot CLI
+      if: ${{ steps.prepare.outputs.should_run == 'true' && steps.resolve.outputs.use_custom_endpoint != 'true' && steps.install_copilot.outcome == 'success' }}
+      id: inference_copilot
       continue-on-error: true
-      uses: actions/ai-inference@b81b2afb8390ee6839b494a404766bef6493c7d9 # v1
+      uses: actions/ai-inference@2c43c91ae16266ca159d311430343c67a5ffa222 # v3.0.0
       with:
         prompt-file: ${{ steps.resolve.outputs.resolved_prompt_file }}
         input: |
@@ -212,13 +228,18 @@ runs:
           issue_body: ${{ steps.prepare.outputs.issue_body_file }}
           recent_comments: ${{ steps.prepare.outputs.recent_comments_file }}
           open_issues: ${{ steps.prepare.outputs.open_issues_file }}
+        model: ${{ steps.resolve.outputs.resolved_model }}
+        provider: copilot
+        token: ${{ inputs.github-token }}
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
 
     - name: Normalize AI result
       if: ${{ steps.prepare.outputs.should_run == 'true' }}
       id: normalize
-      uses: actions/github-script@e69ef5462fd455e02edcaf4dd7708eda96b9eda0 # v7.0.0
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
       env:
-        AI_RESPONSE_FILE: ${{ steps.inference_custom.outputs.response-file || steps.inference_github_models.outputs.response-file }}
+        AI_RESPONSE_FILE: ${{ steps.inference_custom.outputs.response-file || steps.inference_copilot.outputs.response-file }}
         OPEN_ISSUE_NUMBERS: ${{ steps.prepare.outputs.open_issue_numbers }}
         LABEL_MAP_JSON: ${{ steps.resolve.outputs.label_map_json }}
         LANGUAGE_PROFILE_JSON: ${{ steps.resolve.outputs.language_profile_json }}
@@ -233,7 +254,7 @@ runs:
     - name: Check issue freshness
       if: ${{ steps.prepare.outputs.should_run == 'true' && steps.normalize.outputs.ok == 'true' }}
       id: freshness
-      uses: actions/github-script@e69ef5462fd455e02edcaf4dd7708eda96b9eda0 # v7.0.0
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
       env:
         ISSUE_NUMBER: ${{ steps.prepare.outputs.issue_number }}
         ISSUE_FINGERPRINT: ${{ steps.prepare.outputs.issue_fingerprint }}
@@ -253,7 +274,7 @@ runs:
       if: ${{ steps.prepare.outputs.should_run == 'true' && steps.normalize.outputs.ok == 'true' && steps.freshness.outputs.ok == 'true' }}
       id: apply_labels
       continue-on-error: true
-      uses: actions/github-script@e69ef5462fd455e02edcaf4dd7708eda96b9eda0 # v7.0.0
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
       env:
         TRIAGE_RESULT: ${{ steps.normalize.outputs.json }}
         LABEL_MAP_JSON: ${{ steps.resolve.outputs.label_map_json }}
@@ -276,7 +297,7 @@ runs:
     - name: Finalize AI analysis comment
       id: finalize
       if: ${{ always() && steps.prepare.outputs.should_run == 'true' }}
-      uses: actions/github-script@e69ef5462fd455e02edcaf4dd7708eda96b9eda0 # v7.0.0
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
       env:
         COMMENT_ID: ${{ steps.prepare.outputs.comment_id }}
         TRIAGE_RESULT: ${{ steps.normalize.outputs.json }}
@@ -290,7 +311,9 @@ runs:
         DISCUSSION_FINGERPRINT: ${{ steps.prepare.outputs.discussion_fingerprint }}
         RECENT_COMMENTS_LIMIT: ${{ inputs.recent-comments-limit }}
         INFERENCE_CUSTOM_OUTCOME: ${{ steps.inference_custom.outcome }}
-        INFERENCE_GITHUB_OUTCOME: ${{ steps.inference_github_models.outcome }}
+        INFERENCE_COPILOT_OUTCOME: ${{ steps.inference_copilot.outcome }}
+        COPILOT_INSTALL_OUTCOME: ${{ steps.install_copilot.outcome }}
+        TRANSPORT: ${{ steps.resolve.outputs.transport }}
         JOB_STATUS: ${{ job.status }}
         LANGUAGE_PROFILE_JSON: ${{ steps.resolve.outputs.language_profile_json }}
         RERUN_LABELS_JSON: ${{ steps.resolve.outputs.rerun_labels_json }}

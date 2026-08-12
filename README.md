@@ -14,7 +14,7 @@ English | [中文](./README.zh.md)
 - surface possible duplicates and `needs-info` follow-up
 - map canonical labels to repository labels
 - create or update a structured AI analysis comment
-- run with GitHub Models or an OpenAI-compatible endpoint
+- run with GitHub Copilot CLI by default, or preserve an OpenAI-compatible endpoint
 
 ## Canonical Labels
 
@@ -33,7 +33,7 @@ Use `label-map` or `label-map-file` if your repository uses different label name
 
 | Name | Required | Description |
 | --- | --- | --- |
-| `github-token` | Yes | Token with `issues: write` permission. In most workflows this is `secrets.GITHUB_TOKEN`. |
+| `github-token` | Yes | Token with `issues: write` and, for the default Copilot transport, `copilot-requests: write` permission. In most workflows this is `secrets.GITHUB_TOKEN`. |
 | `issue-number` | No | Issue number used for `workflow_dispatch` when the event has no Issue payload. |
 | `language` | No | Output language for the bundled prompt and built-in comments. Supported values: `zh`, `en`. Default `zh`. |
 | `model` | No | Model override for inference. |
@@ -42,7 +42,7 @@ Use `label-map` or `label-map-file` if your repository uses different label name
 | `label-map-file` | No | Path to a YAML label management file. Overrides `label-map`. |
 | `openai-compatible-endpoint` | No | Custom inference endpoint. Must be used with `openai-compatible-token`. |
 | `openai-compatible-token` | No | Token for the custom endpoint. |
-| `openai-compatible-headers` | No | Extra headers forwarded to `actions/ai-inference`. |
+| `openai-compatible-headers` | No | Extra headers forwarded to the OpenAI-compatible inference action. |
 | `comment-marker` | No | Hidden marker used to find the latest AI analysis comment. |
 | `ignore-label` | No | Label that disables analysis and label synchronization. Default `ai-ignore`; set empty to disable. |
 | `label-management` | No | Label policy: `replace`, `add-only`, or `none`. Default `replace`. |
@@ -66,10 +66,27 @@ Use `label-map` or `label-map-file` if your repository uses different label name
 | `comment-status` | Final comment state: `analysis`, `stale`, `fallback`, `newer-run`, `comment-missing`, or `publish-failed`. |
 | `label-sync-status` | Label synchronization state: `applied`, `policy-none`, `conflict`, `ignored`, `stale`, `failed`, or `not-applied`. |
 | `comment-strategy` | `replace_latest` or `new_comment`. |
-| `transport` | `github-models` or `openai-compatible`. |
-| `resolved-model` | Effective model resolved from the prompt file or action defaults. |
+| `transport` | `copilot` or `openai-compatible`. |
+| `resolved-model` | Effective model resolved from the prompt file or action defaults. Legacy `openai/<model>` names are normalized for Copilot. |
 | `resolved-response-format` | Effective response format resolved from the prompt file. |
 | `resolved-model-parameters` | Effective `modelParameters` object resolved from the prompt file, serialized as JSON. |
+
+## Inference Transports
+
+The default transport is GitHub Copilot CLI through `actions/ai-inference@v3`. The action installs the latest `@github/copilot`, passes the workflow's `GITHUB_TOKEN`, and uses the configured Copilot model. `model: gpt-4.1` is a valid override; leaving the resolved model empty lets Copilot choose its default. Legacy `openai/gpt-4.1` style names are converted to `gpt-4.1` only for this transport.
+
+The calling workflow must grant the minimum permissions below:
+
+```yaml
+permissions:
+  contents: read
+  issues: write
+  copilot-requests: write
+```
+
+For organization repositories, an administrator must enable **Allow use of Copilot CLI billed to the organization**. Copilot requests can consume the organization or repository owner's GitHub Copilot AI credits, so enable the policy and spending controls deliberately. If the policy, permission, authentication, or CLI installation is unavailable, the action keeps its fallback-comment behavior and exposes a diagnostic such as `copilot-cli-install-failed` or `copilot-inference-failed`; a successful workflow conclusion alone does not prove that inference succeeded.
+
+GitHub Models is not used by the default transport. It was retired; existing OpenAI-compatible configurations remain supported through the explicit compatibility transport.
 
 ## Basic Usage
 
@@ -91,7 +108,7 @@ on:
 permissions:
   contents: read
   issues: write
-  models: read
+  copilot-requests: write
 
 jobs:
   analyze:
@@ -106,13 +123,15 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           label-map-file: ./.github/issue-ai-label-map.yml
-          model: openai/gpt-4.1
+          model: gpt-4.1
           language: zh
 ```
 
 See [`examples/issue-analyze.yml`](./examples/issue-analyze.yml) for a complete example.
 
 ## OpenAI-Compatible Endpoint
+
+When `openai-compatible-endpoint` and `openai-compatible-token` are both set, the action keeps the explicit OpenAI-compatible transport and forwards `openai-compatible-headers`; the Copilot transport is not used. This preserves existing custom endpoint integrations.
 
 ```yaml
 - uses: mingzaily/issue-ai-analyze@v1
@@ -132,7 +151,7 @@ See [`examples/issue-analyze.yml`](./examples/issue-analyze.yml) for a complete 
 - uses: mingzaily/issue-ai-analyze@v1
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
-    model: openai/gpt-4.1
+    model: gpt-4.1
     language: en
     prompt-file: ./.github/prompts/my-custom-issue-analysis.prompt.yml
 ```

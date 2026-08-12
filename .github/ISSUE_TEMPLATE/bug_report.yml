@@ -12,7 +12,7 @@ body:
         - 评论更新逻辑异常
         - rerun 行为不符合预期
         - prompt 渲染失败
-        - GitHub Models / OpenAI-compatible 接入异常
+        - GitHub Copilot CLI / OpenAI-compatible 接入异常
 
         信息越完整，越容易快速定位。
 
@@ -88,7 +88,7 @@ body:
     attributes:
       label: 模型与提供方
       description: 如果知道，请填写本次使用的模型链路
-      placeholder: 例如：GitHub Models / openai-gpt-4.1，或 DeepSeek / deepseek-chat
+      placeholder: 例如：GitHub Copilot CLI / gpt-4.1，或 DeepSeek / deepseek-chat
     validations:
       required: false
 

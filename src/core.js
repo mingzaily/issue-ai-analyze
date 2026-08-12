@@ -567,13 +567,23 @@ function renderStaleComment({ language = {}, commentMarker, runMarker = '', reas
   ].join('\n');
 }
 
-function decideFinalComment({ normalizeOk, freshnessOk, freshnessReason = '', normalizeError = '', jobStatus = '', inferenceOutcome = '', labelSyncStatus = '' } = {}) {
+function decideFinalComment({ normalizeOk, freshnessOk, freshnessReason = '', normalizeError = '', jobStatus = '', inferenceOutcome = '', transport = '', copilotInstallOutcome = '', labelSyncStatus = '' } = {}) {
   if (normalizeOk !== 'true') {
     const cancelled = String(jobStatus || '').toLowerCase() === 'cancelled' ||
       String(inferenceOutcome || '').toLowerCase() === 'cancelled';
+    const normalizedTransport = String(transport || '').trim().toLowerCase();
+    const normalizedInstallOutcome = String(copilotInstallOutcome || '').trim().toLowerCase();
+    const normalizedInferenceOutcome = String(inferenceOutcome || '').trim().toLowerCase();
+    const copilotFailure = normalizedTransport === 'copilot' && normalizedInferenceOutcome === 'failure';
     return {
       kind: 'fallback',
-      reason: cancelled ? 'analysis-cancelled' : String(normalizeError || 'analysis-incomplete').slice(0, 1000)
+      reason: cancelled
+        ? 'analysis-cancelled'
+        : normalizedTransport === 'copilot' && normalizedInstallOutcome === 'failure'
+          ? 'copilot-cli-install-failed'
+          : copilotFailure
+            ? 'copilot-inference-failed'
+            : String(normalizeError || 'analysis-incomplete').slice(0, 1000)
     };
   }
 

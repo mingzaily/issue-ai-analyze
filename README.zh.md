@@ -14,7 +14,7 @@
 - 提示可能的重复 issue，并处理 `needs-info` 跟进
 - 将 canonical labels 映射到仓库自己的标签
 - 创建或更新结构化 AI 分析评论
-- 支持 GitHub Models 或 OpenAI-compatible 接口
+- 默认使用 GitHub Copilot CLI，也保留 OpenAI-compatible 接口
 
 ## 内部语义标签
 
@@ -33,7 +33,7 @@
 
 | 名称 | 必填 | 说明 |
 | --- | --- | --- |
-| `github-token` | 是 | 需要有 `issues: write` 权限的 GitHub Token。大多数场景直接传 `secrets.GITHUB_TOKEN` 即可。 |
+| `github-token` | 是 | 需要有 `issues: write`；默认 Copilot 通道还需要 `copilot-requests: write` 的 GitHub Token。大多数场景直接传 `secrets.GITHUB_TOKEN` 即可。 |
 | `issue-number` | 否 | `workflow_dispatch` 没有 Issue payload 时使用的 Issue 编号。 |
 | `language` | 否 | 内置 prompt 和内置评论文案的输出语言。支持值：`zh`、`en`，默认 `zh`。 |
 | `model` | 否 | 推理模型覆盖值。 |
@@ -42,7 +42,7 @@
 | `label-map-file` | 否 | YAML 标签管理配置文件路径，优先级高于 `label-map`。 |
 | `openai-compatible-endpoint` | 否 | 自定义推理接口地址，必须和 `openai-compatible-token` 一起使用。 |
 | `openai-compatible-token` | 否 | 自定义接口 Token。 |
-| `openai-compatible-headers` | 否 | 透传给 `actions/ai-inference` 的额外请求头。 |
+| `openai-compatible-headers` | 否 | 透传给 OpenAI-compatible 推理 action 的额外请求头。 |
 | `comment-marker` | 否 | 用于定位最新 AI 分析评论的隐藏标记。 |
 | `ignore-label` | 否 | 禁用分析和标签同步的标签，默认 `ai-ignore`；设为空可禁用。 |
 | `label-management` | 否 | 标签策略：`replace`、`add-only` 或 `none`，默认 `replace`。 |
@@ -66,10 +66,27 @@
 | `comment-status` | 最终评论状态：`analysis`、`stale`、`fallback`、`newer-run`、`comment-missing` 或 `publish-failed`。 |
 | `label-sync-status` | 标签同步状态：`applied`、`policy-none`、`conflict`、`ignored`、`stale`、`failed` 或 `not-applied`。 |
 | `comment-strategy` | `replace_latest` 或 `new_comment`。 |
-| `transport` | `github-models` 或 `openai-compatible`。 |
-| `resolved-model` | 从 prompt 文件或 action 默认值解析得到的最终模型。 |
+| `transport` | `copilot` 或 `openai-compatible`。 |
+| `resolved-model` | 从 prompt 文件或 action 默认值解析得到的最终模型；Copilot 通道会把旧的 `openai/<model>` 名称规范化。 |
 | `resolved-response-format` | 从 prompt 文件解析得到的最终响应格式。 |
 | `resolved-model-parameters` | 从 prompt 文件解析得到的最终 `modelParameters` 对象，JSON 字符串形式。 |
+
+## 推理通道
+
+默认通道是通过 `actions/ai-inference@v3` 调用 GitHub Copilot CLI。Action 会安装最新版 `@github/copilot`，把 workflow 的 `GITHUB_TOKEN` 交给 CLI，并使用配置的 Copilot 模型。`model: gpt-4.1` 是有效覆盖值；如果最终模型为空，则允许 Copilot CLI 自动选择默认模型。只有 Copilot 通道会把旧的 `openai/gpt-4.1` 形式转换为 `gpt-4.1`。
+
+调用方需要配置以下最小权限：
+
+```yaml
+permissions:
+  contents: read
+  issues: write
+  copilot-requests: write
+```
+
+组织仓库还必须启用 **Allow use of Copilot CLI billed to the organization**。Copilot 请求可能消耗组织或仓库所有者的 GitHub Copilot AI credits，请结合组织策略和 spending controls 谨慎启用。如果策略、权限、鉴权或 CLI 安装不可用，Action 仍会发布 fallback 评论，并给出 `copilot-cli-install-failed` 或 `copilot-inference-failed` 等诊断；workflow 显示 Success 不能单独证明推理成功。
+
+默认通道不再使用 GitHub Models。GitHub Models 已退役；已有的 OpenAI-compatible 配置会继续通过显式兼容通道运行。
 
 ## 基础用法
 
@@ -91,7 +108,7 @@ on:
 permissions:
   contents: read
   issues: write
-  models: read
+  copilot-requests: write
 
 jobs:
   analyze:
@@ -106,13 +123,15 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           label-map-file: ./.github/issue-ai-label-map.yml
-          model: openai/gpt-4.1
+          model: gpt-4.1
           language: zh
 ```
 
 完整示例见 [`examples/issue-analyze.yml`](./examples/issue-analyze.yml)。
 
 ## OpenAI-Compatible 接口
+
+同时设置 `openai-compatible-endpoint` 和 `openai-compatible-token` 时，Action 会继续使用显式的 OpenAI-compatible 通道，并透传 `openai-compatible-headers`，不会调用 Copilot。这保证已有自定义接口配置不因默认通道迁移而失效。
 
 ```yaml
 - uses: mingzaily/issue-ai-analyze@v1
@@ -132,7 +151,7 @@ jobs:
 - uses: mingzaily/issue-ai-analyze@v1
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
-    model: openai/gpt-4.1
+    model: gpt-4.1
     language: en
     prompt-file: ./.github/prompts/my-custom-issue-analysis.prompt.yml
 ```

@@ -35,12 +35,14 @@ const state = actionCore.decideFinalComment({
   freshnessReason: process.env.FRESHNESS_REASON,
   normalizeError: process.env.NORMALIZE_ERROR,
   jobStatus: process.env.JOB_STATUS,
-  inferenceOutcome: process.env.INFERENCE_CUSTOM_OUTCOME || process.env.INFERENCE_GITHUB_OUTCOME,
+  inferenceOutcome: process.env.INFERENCE_CUSTOM_OUTCOME || process.env.INFERENCE_COPILOT_OUTCOME,
+  transport: process.env.TRANSPORT,
+  copilotInstallOutcome: process.env.COPILOT_INSTALL_OUTCOME,
   labelSyncStatus: process.env.LABEL_SYNC_STATUS
 });
 const labelSyncStatus = String(process.env.LABEL_SYNC_STATUS || '').trim().toLowerCase();
 const cancellationObserved = String(process.env.JOB_STATUS || '').toLowerCase() === 'cancelled' ||
-  String(process.env.INFERENCE_CUSTOM_OUTCOME || process.env.INFERENCE_GITHUB_OUTCOME || '').toLowerCase() === 'cancelled';
+  String(process.env.INFERENCE_CUSTOM_OUTCOME || process.env.INFERENCE_COPILOT_OUTCOME || '').toLowerCase() === 'cancelled';
 
 if (!commentId) {
   core.warning('No pending comment exists to finalize.');

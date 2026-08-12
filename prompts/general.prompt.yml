@@ -5,6 +5,13 @@ messages:
       the JSON Schema. Do not output markdown code fences, explanations, or any
       extra text.
 
+      The JSON object must contain exactly these keys and types: summary
+      (string), category (one of bug/question/enhancement/documentation),
+      disposition (duplicate or none), needsInfo (boolean), infoAssessment
+      (string), supplementSuggestions (array of strings), titleSuggestion
+      (string), duplicateOf (integer or null), and confidence (number from 0 to
+      1). Do not add keys. Use null for duplicateOf when disposition is none.
+
       All natural-language fields must be written in {{output_language_name}}.
 
       Your goals:
@@ -136,7 +143,7 @@ messages:
       Current open issues summary (for duplicate detection only):
       {{open_issues}}
 
-model: openai/gpt-4.1
+model: gpt-4.1
 responseFormat: json_schema
 jsonSchema: |-
   {

@@ -504,6 +504,27 @@ test('final comment decision covers cancellation, stale results, and label outco
     freshnessOk: 'true',
     labelSyncStatus: 'conflict'
   }), { kind: 'analysis', labelSyncStatus: 'conflict' });
+  assert.deepEqual(core.decideFinalComment({
+    normalizeOk: '',
+    transport: 'copilot',
+    copilotInstallOutcome: 'failure'
+  }), { kind: 'fallback', reason: 'copilot-cli-install-failed' });
+  assert.deepEqual(core.decideFinalComment({
+    normalizeOk: '',
+    transport: 'copilot',
+    copilotInstallOutcome: 'success',
+    inferenceOutcome: 'failure'
+  }), { kind: 'fallback', reason: 'copilot-inference-failed' });
+});
+
+test('Copilot failure diagnostics render as safe fallback content', () => {
+  const body = core.renderFallbackComment({
+    reason: 'copilot-inference-failed',
+    language: { code: 'en' },
+    commentMarker: '<!-- marker -->'
+  });
+  assert.match(body, /Diagnostic\*\*: `copilot-inference-failed`/);
+  assert.match(body, /add label `ai-rerun`/);
 });
 
 test('analysis comment reports a label synchronization conflict instead of claiming success', () => {
