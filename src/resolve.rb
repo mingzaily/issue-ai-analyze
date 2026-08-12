@@ -61,6 +61,70 @@ if endpoint.empty? ^ token.empty?
 end
 transport = endpoint.empty? ? 'copilot' : 'openai-compatible'
 
+response_format_aliases = {
+  'auto' => 'auto',
+  'json_schema' => 'json_schema',
+  'json-schema' => 'json_schema',
+  'json_object' => 'json_object',
+  'json-object' => 'json_object',
+  'prompt' => 'prompt',
+  'prompt-only' => 'prompt',
+  'text' => 'prompt'
+}
+requested_response_format = ENV['INPUT_OPENAI_COMPAT_RESPONSE_FORMAT'].to_s.strip.downcase
+openai_compatible_response_format =
+  if requested_response_format.empty?
+    'auto'
+  elsif response_format_aliases.key?(requested_response_format)
+    response_format_aliases.fetch(requested_response_format)
+  else
+    abort("Invalid openai-compatible-response-format: #{requested_response_format.inspect}. Supported values: auto, json_schema, json_object, prompt")
+  end
+
+parse_compatible_headers = lambda do |raw|
+  value = raw.to_s.strip
+  next {} if value.empty?
+
+  parsed = begin
+    JSON.parse(value)
+  rescue JSON::ParserError
+    begin
+      YAML.safe_load(value, aliases: false)
+    rescue Psych::Exception => error
+      abort("Invalid openai-compatible-headers: #{error.message.lines.first.to_s.strip}")
+    end
+  end
+
+  unless parsed.is_a?(Hash)
+    abort('Invalid openai-compatible-headers: expected a JSON or YAML object')
+  end
+
+  header_name_pattern = /\A[A-Za-z0-9!#$%&'*+\-.^_`|~]+\z/
+  normalized = {}
+  parsed.each do |raw_name, raw_header_value|
+    unless raw_name.is_a?(String) && raw_name.match?(header_name_pattern)
+      abort("Invalid openai-compatible-headers: invalid header name #{raw_name.inspect}")
+    end
+    unless [String, Numeric, TrueClass, FalseClass].any? { |type| raw_header_value.is_a?(type) }
+      abort("Invalid openai-compatible-headers: value for #{raw_name.inspect} must be a scalar")
+    end
+
+    header_value = raw_header_value.to_s
+    if header_value.match?(/[\r\n\u0000]/)
+      abort("Invalid openai-compatible-headers: value for #{raw_name.inspect} contains control characters")
+    end
+
+    normalized_name = raw_name.strip
+    if normalized.keys.any? { |name| name.casecmp?(normalized_name) }
+      abort("Invalid openai-compatible-headers: duplicate header name #{raw_name.inspect}")
+    end
+    normalized[normalized_name] = header_value
+  end
+  normalized
+end
+
+openai_compatible_headers = parse_compatible_headers.call(ENV['INPUT_OPENAI_COMPAT_HEADERS'])
+
 prompt = YAML.load_file(prompt_source)
 unless prompt.is_a?(Hash)
   abort("Prompt file must be a YAML mapping: #{prompt_source}")
@@ -179,10 +243,22 @@ prompt['model'] = model_override unless model_override.empty?
 # Copilot must be allowed to choose a currently available default model instead
 # of receiving a stale provider-specific model name.
 if transport == 'openai-compatible' && prompt_source == default_prompt && model_override.empty? && prompt['model'].to_s.strip.empty?
-  prompt['model'] = 'openai/gpt-4.1'
+  prompt['model'] = 'gpt-4.1'
 end
 
 resolved_model = prompt['model'].to_s.strip
+
+if transport == 'openai-compatible'
+  legacy_model_match = resolved_model.match(/\Aopenai\/(.+)\z/i)
+  if legacy_model_match
+    converted_model = legacy_model_match[1].to_s.strip
+    if converted_model.empty? || converted_model.include?('/')
+      abort("Model #{resolved_model.inspect} cannot be converted for the OpenAI-compatible transport. Use a model name such as gpt-4.1 or the provider's documented model identifier.")
+    end
+    resolved_model = converted_model
+    prompt['model'] = resolved_model
+  end
+end
 
 if transport == 'copilot'
   unless resolved_model.empty?
@@ -343,6 +419,8 @@ File.open(ENV.fetch('GITHUB_OUTPUT'), 'a') do |f|
   f.puts("resolved_model=#{resolved_model}")
   f.puts("resolved_response_format=#{resolved_response_format}")
   f.puts("resolved_model_parameters_json=#{JSON.generate(resolved_model_parameters)}")
+  f.puts("openai_compatible_response_format=#{openai_compatible_response_format}")
+  f.puts("openai_compatible_headers_json=#{JSON.generate(openai_compatible_headers)}")
   f.puts("language=#{normalized_language}")
   f.puts("use_custom_endpoint=#{endpoint.empty? ? 'false' : 'true'}")
   f.puts("transport=#{transport}")

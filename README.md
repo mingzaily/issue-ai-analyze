@@ -6,7 +6,7 @@ English | [中文](./README.zh.md)
 [![Release](https://img.shields.io/github/v/release/mingzaily/issue-ai-analyze?display_name=tag)](https://github.com/mingzaily/issue-ai-analyze/releases)
 [![Stars](https://img.shields.io/github/stars/mingzaily/issue-ai-analyze?style=social)](https://github.com/mingzaily/issue-ai-analyze/stargazers)
 
-`issue-ai-analyze` is a GitHub Action for issue triage. It analyzes issue content with `actions/ai-inference`, normalizes the result into a small set of canonical labels, maps them to repository labels, and writes a structured analysis comment.
+`issue-ai-analyze` is a GitHub Action for issue triage. It analyzes issue content with GitHub Copilot CLI by default, or with a built-in OpenAI-compatible client, normalizes the result into a small set of canonical labels, maps them to repository labels, and writes a structured analysis comment.
 
 ## What It Does
 
@@ -36,13 +36,14 @@ Use `label-map` or `label-map-file` if your repository uses different label name
 | `github-token` | Yes | Token with `issues: write` and, for the default Copilot transport, `copilot-requests: write` permission. In most workflows this is `secrets.GITHUB_TOKEN`. |
 | `issue-number` | No | Issue number used for `workflow_dispatch` when the event has no Issue payload. |
 | `language` | No | Output language for the bundled prompt and built-in comments. Supported values: `zh`, `en`. Default `zh`. |
-| `model` | No | Optional model override. Leave empty for Copilot to choose its currently available default; custom endpoints receive the configured value unchanged. |
+| `model` | No | Optional model override. Leave empty for Copilot to choose its currently available default. A simple legacy `openai/<model>` name is normalized for either transport. |
 | `prompt-file` | No | Path to a custom prompt YAML file. Defaults to the bundled `prompts/general.prompt.yml`. |
 | `label-map` | No | Inline label mapping. Use one `key=value` entry per line. Use `rerun=` for rerun labels. |
 | `label-map-file` | No | Path to a YAML label management file. Overrides `label-map`. |
 | `openai-compatible-endpoint` | No | Custom inference endpoint. Must be used with `openai-compatible-token`. |
 | `openai-compatible-token` | No | Token for the custom endpoint. |
-| `openai-compatible-headers` | No | Extra headers forwarded to the OpenAI-compatible inference action. |
+| `openai-compatible-headers` | No | JSON or YAML object of extra headers for the OpenAI-compatible endpoint. Header names and scalar values are validated before the request. |
+| `openai-compatible-response-format` | No | OpenAI-compatible response strategy: `auto`, `json_schema`, `json_object`, or `prompt` (`text` is an alias). Default `auto`. |
 | `comment-marker` | No | Hidden marker used to find the latest AI analysis comment. |
 | `ignore-label` | No | Label that disables analysis and label synchronization. Default `ai-ignore`; set empty to disable. |
 | `label-management` | No | Label policy: `replace`, `add-only`, or `none`. Default `replace`. |
@@ -67,9 +68,10 @@ Use `label-map` or `label-map-file` if your repository uses different label name
 | `label-sync-status` | Label synchronization state: `applied`, `policy-none`, `conflict`, `ignored`, `stale`, `failed`, or `not-applied`. |
 | `comment-strategy` | `replace_latest` or `new_comment`. |
 | `transport` | `copilot` or `openai-compatible`. |
-| `resolved-model` | Effective model resolved from the prompt file or action defaults. Empty means Copilot CLI chooses its default; legacy `openai/<model>` names are normalized for Copilot. |
+| `resolved-model` | Effective model resolved from the prompt file or action defaults. Empty means Copilot CLI chooses its default; simple legacy `openai/<model>` names are normalized when unambiguous. |
 | `resolved-response-format` | Effective response format resolved from the prompt file. |
 | `resolved-model-parameters` | Effective `modelParameters` object resolved from the prompt file, serialized as JSON. |
+| `openai-compatible-response-format` | Effective response strategy selected for the OpenAI-compatible transport. |
 
 ## Inference Transports
 
@@ -134,7 +136,25 @@ See [`examples/issue-analyze.yml`](./examples/issue-analyze.yml) for a complete 
 
 ## OpenAI-Compatible Endpoint
 
-When `openai-compatible-endpoint` and `openai-compatible-token` are both set, the action keeps the explicit OpenAI-compatible transport and forwards `openai-compatible-headers`; the Copilot transport is not used. This preserves existing custom endpoint integrations.
+When `openai-compatible-endpoint` and `openai-compatible-token` are both set, the action keeps the explicit OpenAI-compatible transport and does not install or call Copilot. The transport uses a small built-in HTTP client, so it can control `response_format`, forward validated `openai-compatible-headers`, and preserve the upstream HTTP error in the fallback comment. The endpoint may be a base URL such as `https://example.com/v1`; `/chat/completions` is added automatically.
+
+The default `openai-compatible-response-format: auto` strategy is designed for providers with different levels of OpenAI compatibility:
+
+- If the prompt declares `json_schema`, try `json_schema` first.
+- If the provider returns a 400/422 error that clearly indicates an unsupported response format, retry with `json_object`, then with no `response_format` parameter.
+- The final prompt-only attempt adds a JSON-only instruction (and the schema when available). The existing normalizer still parses and validates the model result.
+
+Use `json_schema` when the endpoint is known to support it and you want a hard failure instead of negotiation. Use `json_object` or `prompt` when the provider documents only that capability. `text` is accepted as an alias for `prompt`. A model name such as `openai/gpt-4.1` is normalized to `gpt-4.1`; ambiguous names such as `openai/azure/gpt-4.1` fail with a diagnostic rather than being silently changed.
+
+Headers can be supplied as either JSON or a simple YAML mapping. For example:
+
+```yaml
+openai-compatible-headers: |
+  X-Provider: packy
+  X-Trace: issue-ai-analyze
+```
+
+Invalid header names, non-scalar values, duplicate case-insensitive names, and control characters are rejected before a request is made. The token input supplies `Authorization: Bearer ...` unless a custom Authorization header is explicitly provided.
 
 This compatibility path does not require GitHub Copilot or `copilot-requests: write`, but it still requires `issues: write` for the GitHub API operations performed by the action.
 
@@ -148,7 +168,10 @@ This compatibility path does not require GitHub Copilot or `copilot-requests: wr
     openai-compatible-endpoint: ${{ vars.ISSUE_OPENAI_COMPAT_ENDPOINT }}
     openai-compatible-token: ${{ secrets.ISSUE_OPENAI_COMPAT_TOKEN }}
     openai-compatible-headers: ${{ vars.ISSUE_OPENAI_COMPAT_HEADERS }}
+    openai-compatible-response-format: auto
 ```
+
+The compatibility transport does not require GitHub Copilot or `copilot-requests: write`, but it still requires `issues: write` for GitHub API operations. If the upstream returns 400, 401, 404, or another request error, the final fallback comment includes a sanitized `openai-compatible-http-*` diagnostic instead of only `missing-ai-response-file`.
 
 ## Custom Prompt
 

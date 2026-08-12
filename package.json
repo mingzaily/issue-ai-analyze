@@ -1,6 +1,6 @@
 {
   "name": "issue-ai-analyze",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "Tests for the Issue AI Analyze composite action.",
   "scripts": {

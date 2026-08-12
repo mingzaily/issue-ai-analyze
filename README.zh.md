@@ -6,7 +6,7 @@
 [![Release](https://img.shields.io/github/v/release/mingzaily/issue-ai-analyze?display_name=tag)](https://github.com/mingzaily/issue-ai-analyze/releases)
 [![Stars](https://img.shields.io/github/stars/mingzaily/issue-ai-analyze?style=social)](https://github.com/mingzaily/issue-ai-analyze/stargazers)
 
-`issue-ai-analyze` 是一个用于 issue triage 的 GitHub Action。它通过 `actions/ai-inference` 分析 issue 内容，将结果归一化为一组较小的 canonical labels，映射到仓库标签，并写入结构化分析评论。
+`issue-ai-analyze` 是一个用于 issue triage 的 GitHub Action。默认通过 GitHub Copilot CLI 分析 issue，也可以使用内置的 OpenAI-compatible 客户端，将结果归一化为一组较小的 canonical labels，映射到仓库标签，并写入结构化分析评论。
 
 ## 主要行为
 
@@ -36,13 +36,14 @@
 | `github-token` | 是 | 需要有 `issues: write`；默认 Copilot 通道还需要 `copilot-requests: write` 的 GitHub Token。大多数场景直接传 `secrets.GITHUB_TOKEN` 即可。 |
 | `issue-number` | 否 | `workflow_dispatch` 没有 Issue payload 时使用的 Issue 编号。 |
 | `language` | 否 | 内置 prompt 和内置评论文案的输出语言。支持值：`zh`、`en`，默认 `zh`。 |
-| `model` | 否 | 可选的模型覆盖值。留空时由 Copilot 自动选择当前可用的默认模型；自定义接口会原样接收该值。 |
+| `model` | 否 | 可选的模型覆盖值。留空时由 Copilot 自动选择当前可用的默认模型；简单的旧式 `openai/<model>` 名称会在两个通道中规范化。 |
 | `prompt-file` | 否 | 自定义 prompt YAML 文件路径。默认使用内置的 `prompts/general.prompt.yml`。 |
 | `label-map` | 否 | 内联标签映射，按行写 `key=value`。重跑标签用 `rerun=`。 |
 | `label-map-file` | 否 | YAML 标签管理配置文件路径，优先级高于 `label-map`。 |
 | `openai-compatible-endpoint` | 否 | 自定义推理接口地址，必须和 `openai-compatible-token` 一起使用。 |
 | `openai-compatible-token` | 否 | 自定义接口 Token。 |
-| `openai-compatible-headers` | 否 | 透传给 OpenAI-compatible 推理 action 的额外请求头。 |
+| `openai-compatible-headers` | 否 | OpenAI-compatible 接口的额外请求头 JSON 或 YAML 对象。请求前会校验请求头名称和值。 |
+| `openai-compatible-response-format` | 否 | OpenAI-compatible 响应策略：`auto`、`json_schema`、`json_object` 或 `prompt`（`text` 是别名）。默认 `auto`。 |
 | `comment-marker` | 否 | 用于定位最新 AI 分析评论的隐藏标记。 |
 | `ignore-label` | 否 | 禁用分析和标签同步的标签，默认 `ai-ignore`；设为空可禁用。 |
 | `label-management` | 否 | 标签策略：`replace`、`add-only` 或 `none`，默认 `replace`。 |
@@ -67,9 +68,10 @@
 | `label-sync-status` | 标签同步状态：`applied`、`policy-none`、`conflict`、`ignored`、`stale`、`failed` 或 `not-applied`。 |
 | `comment-strategy` | `replace_latest` 或 `new_comment`。 |
 | `transport` | `copilot` 或 `openai-compatible`。 |
-| `resolved-model` | 从 prompt 文件或 action 默认值解析得到的最终模型；为空表示由 Copilot CLI 自动选择默认模型，Copilot 通道会把旧的 `openai/<model>` 名称规范化。 |
+| `resolved-model` | 从 prompt 文件或 action 默认值解析得到的最终模型；为空表示由 Copilot CLI 自动选择默认模型，简单且无歧义的旧式 `openai/<model>` 名称会被规范化。 |
 | `resolved-response-format` | 从 prompt 文件解析得到的最终响应格式。 |
 | `resolved-model-parameters` | 从 prompt 文件解析得到的最终 `modelParameters` 对象，JSON 字符串形式。 |
+| `openai-compatible-response-format` | OpenAI-compatible 通道最终使用的响应策略。 |
 
 ## 推理通道
 
@@ -134,7 +136,25 @@ jobs:
 
 ## OpenAI-Compatible 接口
 
-同时设置 `openai-compatible-endpoint` 和 `openai-compatible-token` 时，Action 会继续使用显式的 OpenAI-compatible 通道，并透传 `openai-compatible-headers`，不会调用 Copilot。这保证已有自定义接口配置不因默认通道迁移而失效。
+同时设置 `openai-compatible-endpoint` 和 `openai-compatible-token` 时，Action 会继续使用显式的 OpenAI-compatible 通道，不会安装或调用 Copilot。该通道使用仓库内置的轻量 HTTP 客户端，可以控制 `response_format`、透传经过校验的 `openai-compatible-headers`，并把上游 HTTP 错误保留到最终兜底评论中。Endpoint 可以填写 `https://example.com/v1` 这样的基础地址，Action 会自动补上 `/chat/completions`。
+
+默认的 `openai-compatible-response-format: auto` 用于兼容不同程度支持 OpenAI 协议的中转服务：
+
+- Prompt 声明 `json_schema` 时先尝试 `json_schema`。
+- 如果服务返回明确表示不支持响应格式的 400/422，则依次降级到 `json_object`，再降级到不发送 `response_format` 参数。
+- 最后的纯 Prompt 尝试会追加“只返回 JSON”的约束（如果有 Schema 也会附带），现有 normalizer 仍会继续解析和校验字段。
+
+如果服务明确支持 `json_schema`，可以显式设置 `json_schema`，让不兼容时直接失败；也可以使用 `json_object` 或 `prompt`。`text` 是 `prompt` 的别名。像 `openai/gpt-4.1` 这样的旧模型名会规范化为 `gpt-4.1`；像 `openai/azure/gpt-4.1` 这样无法可靠判断的名称会明确报错，不会静默选错模型。
+
+请求头可以使用 JSON 或简单 YAML 映射，例如：
+
+```yaml
+openai-compatible-headers: |
+  X-Provider: packy
+  X-Trace: issue-ai-analyze
+```
+
+无效请求头名称、非标量值、大小写不敏感的重复名称以及控制字符会在发起请求前被拒绝。除非显式提供自定义 Authorization 请求头，否则 token 输入会生成 `Authorization: Bearer ...`。
 
 这个兼容通道不需要 GitHub Copilot 或 `copilot-requests: write`，但 Action 仍需要 `issues: write` 来调用 GitHub API 更新评论和标签。
 
@@ -148,7 +168,10 @@ jobs:
     openai-compatible-endpoint: ${{ vars.ISSUE_OPENAI_COMPAT_ENDPOINT }}
     openai-compatible-token: ${{ secrets.ISSUE_OPENAI_COMPAT_TOKEN }}
     openai-compatible-headers: ${{ vars.ISSUE_OPENAI_COMPAT_HEADERS }}
+    openai-compatible-response-format: auto
 ```
+
+这个兼容通道不需要 GitHub Copilot 或 `copilot-requests: write`，但仍需要 `issues: write` 来调用 GitHub API 更新评论和标签。如果上游返回 400、401、404 或其他请求错误，最终兜底评论会显示经过脱敏的 `openai-compatible-http-*` 诊断信息，不会再只显示 `missing-ai-response-file`。
 
 ## 自定义 Prompt
 

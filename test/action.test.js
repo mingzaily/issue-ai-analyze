@@ -53,7 +53,11 @@ test('action keeps label synchronization and comment finalization separate', () 
   assert.match(action, /Set up Node\.js for GitHub Copilot CLI/);
   assert.match(action, /npm install --global --no-audit --no-fund @github\/copilot@latest/);
   assert.match(action, /actions\/ai-inference@2c43c91ae16266ca159d311430343c67a5ffa222/);
-  assert.match(action, /actions\/ai-inference@b81b2afb8390ee6839b494a404766bef6493c7d9/);
+  assert.match(action, /src\/openai_compatible\.rb/);
+  assert.match(action, /OPENAI_COMPAT_HEADERS_JSON/);
+  assert.match(action, /openai-compatible-response-format/);
+  assert.match(action, /INFERENCE_ERROR/);
+  assert.doesNotMatch(action, /actions\/ai-inference@b81b2afb8390ee6839b494a404766bef6493c7d9/);
   assert.match(action, /GITHUB_TOKEN: \$\{\{ inputs\.github-token \}\}/);
   assert.match(action, /TRANSPORT: \$\{\{ steps\.resolve\.outputs\.transport \}\}/);
   assert.match(action, /steps\.install_copilot\.outcome == 'success'/);
@@ -81,7 +85,7 @@ test('documentation describes rerun label isolation and every final comment stat
     assert.match(workflowDocument, /copilot-requests: write/);
     assert.doesNotMatch(workflowDocument, /^\s+model: gpt-4\.1$/m);
   }
-  assert.equal(packageJson.version, '1.2.0');
+  assert.equal(packageJson.version, '1.2.1');
 });
 
 test('resolver rejects rerun labels that overlap mapped AI-managed labels', () => {
@@ -108,6 +112,8 @@ test('resolver rejects rerun labels that overlap mapped AI-managed labels', () =
       INPUT_MODEL: '',
       INPUT_OPENAI_COMPAT_ENDPOINT: '',
       INPUT_OPENAI_COMPAT_TOKEN: '',
+      INPUT_OPENAI_COMPAT_HEADERS: '',
+      INPUT_OPENAI_COMPAT_RESPONSE_FORMAT: '',
       RESOLVED_PROMPT_FILE: promptFile,
       RUNNER_TEMP: tempDir,
       ...overrides
@@ -148,13 +154,32 @@ test('resolver rejects rerun labels that overlap mapped AI-managed labels', () =
   assert.match(customResult.output, /use_custom_endpoint=true/);
   assert.match(customResult.output, /resolved_model=deepseek-chat/);
   assert.match(customResult.prompt, /model: deepseek-chat/);
+  assert.match(customResult.output, /openai_compatible_response_format=auto/);
+  assert.match(customResult.output, /openai_compatible_headers_json=\{\}/);
+
+  const customLegacyModelResult = runResolver('bug=type/bug\nrerun=ai-rerun', {
+    INPUT_MODEL: 'openai/gpt-4.1',
+    INPUT_OPENAI_COMPAT_ENDPOINT: 'https://example.test/v1',
+    INPUT_OPENAI_COMPAT_TOKEN: 'test-token'
+  });
+  assert.match(customLegacyModelResult.output, /resolved_model=gpt-4\.1/);
+  assert.match(customLegacyModelResult.prompt, /model: gpt-4\.1/);
+
+  const customHeadersResult = runResolver('bug=type/bug\nrerun=ai-rerun', {
+    INPUT_OPENAI_COMPAT_ENDPOINT: 'https://example.test/v1',
+    INPUT_OPENAI_COMPAT_TOKEN: 'test-token',
+    INPUT_OPENAI_COMPAT_HEADERS: 'X-Packy-Trace: test-trace\nX-Retry: 2',
+    INPUT_OPENAI_COMPAT_RESPONSE_FORMAT: 'text'
+  });
+  assert.match(customHeadersResult.output, /openai_compatible_response_format=prompt/);
+  assert.match(customHeadersResult.output, /openai_compatible_headers_json=\{"X-Packy-Trace":"test-trace","X-Retry":"2"\}/);
 
   const customDefaultResult = runResolver('bug=type/bug\nrerun=ai-rerun', {
     INPUT_OPENAI_COMPAT_ENDPOINT: 'https://example.test/v1',
     INPUT_OPENAI_COMPAT_TOKEN: 'test-token'
   });
-  assert.match(customDefaultResult.output, /resolved_model=openai\/gpt-4\.1/);
-  assert.match(customDefaultResult.prompt, /model: openai\/gpt-4\.1/);
+  assert.match(customDefaultResult.output, /resolved_model=gpt-4\.1/);
+  assert.match(customDefaultResult.prompt, /model: gpt-4\.1/);
 
   const copilotDefaultResult = runResolver('bug=type/bug\nrerun=ai-rerun');
   assert.match(copilotDefaultResult.output, /transport=copilot/);
@@ -168,6 +193,14 @@ test('resolver rejects rerun labels that overlap mapped AI-managed labels', () =
   assert.throws(
     () => runResolver('bug=type/bug', { INPUT_OPENAI_COMPAT_ENDPOINT: 'https://example.test/v1' }),
     error => error.status !== 0 && String(error.stderr).includes('must be set together')
+  );
+  assert.throws(
+    () => runResolver('bug=type/bug', { INPUT_OPENAI_COMPAT_ENDPOINT: 'https://example.test/v1', INPUT_OPENAI_COMPAT_TOKEN: 'test-token', INPUT_OPENAI_COMPAT_HEADERS: '{"X-Test":[]}' }),
+    error => error.status !== 0 && String(error.stderr).includes('must be a scalar')
+  );
+  assert.throws(
+    () => runResolver('bug=type/bug', { INPUT_OPENAI_COMPAT_ENDPOINT: 'https://example.test/v1', INPUT_OPENAI_COMPAT_TOKEN: 'test-token', INPUT_OPENAI_COMPAT_RESPONSE_FORMAT: 'unsupported' }),
+    error => error.status !== 0 && String(error.stderr).includes('Invalid openai-compatible-response-format')
   );
 
   assert.doesNotThrow(() => runResolver('bug=type/bug\nrerun=ai-rerun'));

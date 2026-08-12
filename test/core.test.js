@@ -515,6 +515,11 @@ test('final comment decision covers cancellation, stale results, and label outco
     copilotInstallOutcome: 'success',
     inferenceOutcome: 'failure'
   }), { kind: 'fallback', reason: 'copilot-inference-failed' });
+  assert.deepEqual(core.decideFinalComment({
+    normalizeOk: '',
+    normalizeError: 'missing-ai-response-file',
+    inferenceError: 'openai-compatible-http-400: This response_format type is unavailable now'
+  }), { kind: 'fallback', reason: 'openai-compatible-http-400: This response_format type is unavailable now' });
 });
 
 test('Copilot failure diagnostics render as safe fallback content', () => {

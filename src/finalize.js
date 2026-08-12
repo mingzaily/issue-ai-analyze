@@ -34,6 +34,7 @@ const state = actionCore.decideFinalComment({
   freshnessOk: String(process.env.FRESHNESS_OK || ''),
   freshnessReason: process.env.FRESHNESS_REASON,
   normalizeError: process.env.NORMALIZE_ERROR,
+  inferenceError: process.env.INFERENCE_ERROR,
   jobStatus: process.env.JOB_STATUS,
   inferenceOutcome: process.env.INFERENCE_CUSTOM_OUTCOME || process.env.INFERENCE_COPILOT_OUTCOME,
   transport: process.env.TRANSPORT,

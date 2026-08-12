@@ -58,6 +58,7 @@ jobs:
           node --check src/apply-labels.js
           node --check src/finalize.js
           ruby -c src/resolve.rb
+          ruby -c src/openai_compatible.rb
 
   yaml:
     runs-on: ubuntu-latest

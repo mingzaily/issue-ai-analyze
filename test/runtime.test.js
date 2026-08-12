@@ -136,6 +136,7 @@ function finalizeEnv(runMarker, labelSyncStatus = '') {
     JOB_STATUS: 'cancelled',
     INFERENCE_CUSTOM_OUTCOME: 'cancelled',
     INFERENCE_COPILOT_OUTCOME: '',
+    INFERENCE_ERROR: '',
     RECENT_COMMENTS_LIMIT: '10'
   };
 }
@@ -225,6 +226,25 @@ test('finalization keeps a pending plan when label synchronization was cancelled
   assert.equal(core.outputs.comment_status, 'fallback');
   assert.deepEqual(actionCore.parseLabelPlan(comment.body).add, ['type/bug']);
   assert.deepEqual(actionCore.parseManagedLabels(comment.body), ['type/bug']);
+});
+
+test('finalization publishes the upstream compatibility error in the fallback comment', async () => {
+  const issue = makeIssue();
+  const runMarker = '<!-- run:new -->';
+  const comment = { body: `pending\n${runMarker}\n<!-- issue-ai-analyze -->` };
+  const github = makeGithub(issue, comment);
+  const core = makeCore();
+
+  await withEnv({
+    ...finalizeEnv(runMarker),
+    JOB_STATUS: 'success',
+    INFERENCE_CUSTOM_OUTCOME: 'failure',
+    INFERENCE_ERROR: 'openai-compatible-http-400: This response_format type is unavailable now'
+  }, () => finalize({ github, context, core }));
+
+  assert.equal(core.outputs.comment_status, 'fallback');
+  assert.match(comment.body, /openai-compatible-http-400/);
+  assert.doesNotMatch(comment.body, /missing-ai-response-file/);
 });
 
 test('finalization keeps an incomplete plan even when label sync reports applied', async () => {

@@ -567,7 +567,7 @@ function renderStaleComment({ language = {}, commentMarker, runMarker = '', reas
   ].join('\n');
 }
 
-function decideFinalComment({ normalizeOk, freshnessOk, freshnessReason = '', normalizeError = '', jobStatus = '', inferenceOutcome = '', transport = '', copilotInstallOutcome = '', labelSyncStatus = '' } = {}) {
+function decideFinalComment({ normalizeOk, freshnessOk, freshnessReason = '', normalizeError = '', inferenceError = '', jobStatus = '', inferenceOutcome = '', transport = '', copilotInstallOutcome = '', labelSyncStatus = '' } = {}) {
   if (normalizeOk !== 'true') {
     const cancelled = String(jobStatus || '').toLowerCase() === 'cancelled' ||
       String(inferenceOutcome || '').toLowerCase() === 'cancelled';
@@ -575,11 +575,14 @@ function decideFinalComment({ normalizeOk, freshnessOk, freshnessReason = '', no
     const normalizedInstallOutcome = String(copilotInstallOutcome || '').trim().toLowerCase();
     const normalizedInferenceOutcome = String(inferenceOutcome || '').trim().toLowerCase();
     const copilotFailure = normalizedTransport === 'copilot' && normalizedInferenceOutcome === 'failure';
+    const explicitInferenceError = String(inferenceError || '').trim();
     return {
       kind: 'fallback',
       reason: cancelled
         ? 'analysis-cancelled'
-        : normalizedTransport === 'copilot' && normalizedInstallOutcome === 'failure'
+        : explicitInferenceError
+          ? explicitInferenceError.slice(0, 1000)
+          : normalizedTransport === 'copilot' && normalizedInstallOutcome === 'failure'
           ? 'copilot-cli-install-failed'
           : copilotFailure
             ? 'copilot-inference-failed'
