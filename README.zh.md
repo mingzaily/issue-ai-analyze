@@ -34,6 +34,7 @@
 | 名称 | 必填 | 说明 |
 | --- | --- | --- |
 | `github-token` | 是 | 需要有 `issues: write` 权限的 GitHub Token。大多数场景直接传 `secrets.GITHUB_TOKEN` 即可。 |
+| `issue-number` | 否 | `workflow_dispatch` 没有 Issue payload 时使用的 Issue 编号。 |
 | `language` | 否 | 内置 prompt 和内置评论文案的输出语言。支持值：`zh`、`en`，默认 `zh`。 |
 | `model` | 否 | 推理模型覆盖值。 |
 | `prompt-file` | 否 | 自定义 prompt YAML 文件路径。默认使用内置的 `prompts/general.prompt.yml`。 |
@@ -43,21 +44,27 @@
 | `openai-compatible-token` | 否 | 自定义接口 Token。 |
 | `openai-compatible-headers` | 否 | 透传给 `actions/ai-inference` 的额外请求头。 |
 | `comment-marker` | 否 | 用于定位最新 AI 分析评论的隐藏标记。 |
-| `recent-comments-limit` | 否 | 传给 prompt 的最新评论数量，默认 `10`。 |
-| `open-issues-limit` | 否 | 用于重复判断的 open issue 数量，默认 `50`。 |
+| `ignore-label` | 否 | 禁用分析和标签同步的标签，默认 `ai-ignore`；设为空可禁用。 |
+| `label-management` | 否 | 标签策略：`replace`、`add-only` 或 `none`，默认 `replace`。 |
+| `recent-comments-limit` | 否 | 传给 prompt 的最新评论数量，必须是 `1` 到 `100` 的整数，默认 `10`。 |
+| `open-issues-limit` | 否 | 用于重复判断的 open issue 数量，必须是 `1` 到 `100` 的整数，默认 `50`。 |
 
 ## 输出参数
 
 | 名称 | 说明 |
 | --- | --- |
 | `should-run` | 当前事件是否触发分析。 |
+| `skip-reason` | `should-run` 为 `false` 时的跳过原因。 |
+| `issue-number` | 本次运行选中的 Issue 编号。 |
 | `ok` | 规范化是否成功。 |
 | `result-json` | 最终规范化后的分析结果 JSON。 |
-| `labels` | 实际应用到 issue 的标签数组 JSON。 |
+| `labels` | 分析选中的映射后标签数组 JSON；具体是否应用由标签策略决定。 |
 | `category` | 规范化后的分类。 |
 | `disposition` | 规范化后的处置结果。 |
 | `needs-info` | 当前是否仍需补充信息。 |
 | `comment-id` | 本次创建或更新的 AI 评论 ID。 |
+| `comment-status` | 最终评论状态：`analysis`、`stale`、`fallback`、`newer-run`、`comment-missing` 或 `publish-failed`。 |
+| `label-sync-status` | 标签同步状态：`applied`、`policy-none`、`conflict`、`ignored`、`stale`、`failed` 或 `not-applied`。 |
 | `comment-strategy` | `replace_latest` 或 `new_comment`。 |
 | `transport` | `github-models` 或 `openai-compatible`。 |
 | `resolved-model` | 从 prompt 文件或 action 默认值解析得到的最终模型。 |
@@ -70,10 +77,16 @@
 name: AI Issue Assistant
 
 on:
+  workflow_dispatch:
+    inputs:
+      issue-number:
+        description: Issue number to analyze
+        required: true
+        type: number
   issues:
     types: [opened, reopened, edited, labeled]
   issue_comment:
-    types: [created]
+    types: [created, edited]
 
 permissions:
   contents: read
@@ -84,7 +97,7 @@ jobs:
   analyze:
     runs-on: ubuntu-latest
     concurrency:
-      group: issue-ai-analyze-${{ github.repository }}-${{ github.event.issue.number }}
+      group: issue-ai-analyze-${{ github.repository }}-${{ github.event.issue.number || inputs.issue-number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -158,6 +171,14 @@ rerun:
 
 `label-map` 和 `label-map-file` 只负责重命名这几个内置语义标签，不会新增新的 canonical category，也不支持把一个语义标签直接映射成多个仓库标签。
 
+重跑标签不能与任何映射后的 AI 托管标签或 `ignore-label` 相同，`ignore-label` 也不能与映射后的 AI 托管标签相同。例如配置了 `bug=type/bug` 时，`rerun=ai-rerun` 有效，但 `rerun=type/bug` 会被拒绝。
+
+Action 会在自己的 AI 评论中用隐藏元数据记录由 AI 添加的标签。`replace` 模式只会删除这些已记录为 AI 所有的标签；升级前已经存在的标签不会被追溯认领。分析期间如果维护者修改了当前托管标签中的任意一个，Action 会返回 `label-sync-status: conflict`，不会覆盖这次人工调整。
+
+在修改标签前，Action 还会记录一份隐藏的待同步意图。GitHub 确认标签更新后，这份意图才会标记为已确认；如果 finalize 被中断，后续运行可以据此恢复标签归属。未确认的意图不会在发生人工冲突后被用来认领标签。
+
+默认情况下，Action 只替换自己托管的标签。可以使用 `label-management: add-only` 保留已有托管标签，或使用 `label-management: none` 只发布分析评论、不修改标签。维护者希望禁止 AI 处理某个 Issue 时，可以添加 `ai-ignore` 标签，也可以通过 `ignore-label` 配置其他标签名。
+
 ## 自定义标签扩展
 
 当前内置的语义标签有：
@@ -216,7 +237,15 @@ rerun:
 ## 行为说明
 
 - `issues.opened`、`issues.reopened`、`issues.edited` 以及配置的重跑标签会触发分析。
+- `workflow_dispatch` 可以通过填写 `issue-number` 手动分析一个 open Issue。
+- 已关闭的 issue 和 pull request 对话会被跳过。
 - 当 issue 作者在 `needs-info` 状态下回复时，会新增一条 AI 评论。
 - 标签管理配置中的重跑标签会更新最新一条 AI 评论。
 - action 只管理上面这些语义标签映射后的目标标签。
+- 最后的 finalize 步骤会在取消、失败、内容过期或并发覆盖时，尽量把“分析中”评论更新为对应状态。
+- 发布前会重新校验最新的非 AI 讨论；分析期间新增或修改作者/维护者评论时，本次结果会失效，不再发布旧上下文的结论。
 - action 不负责自动关闭 issue。
+
+自定义 prompt 必须保持内置 JSON 契约：`needsInfo` 必须是布尔值，`confidence` 必须是 `0` 到 `1` 的数字，并且所有必填字段都要存在。模型输出格式异常时会安全失败，并更新为 fallback 评论。
+
+如果对供应链安全要求更高，建议把 `mingzaily/issue-ai-analyze` 从方便使用的 `@v1` 固定到完整 release commit SHA。Action 内部依赖的第三方 Actions 已固定到完整 SHA。

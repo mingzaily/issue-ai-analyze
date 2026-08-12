@@ -5,11 +5,64 @@ on:
   pull_request:
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      - name: Run behavior tests with coverage
+        run: npm test
+
+      - name: Compile embedded github-script programs
+        run: |
+          ruby -ryaml -rjson -e '
+            yaml = YAML.load_file("action.yml")
+            scripts = []
+            walk = lambda do |value|
+              if value.is_a?(Hash)
+                value.each do |key, child|
+                  scripts << child if key.to_s == "script" && child.is_a?(String)
+                  walk.call(child)
+                end
+              elsif value.is_a?(Array)
+                value.each { |child| walk.call(child) }
+              end
+            end
+            walk.call(yaml)
+            puts JSON.generate(scripts)
+          ' | node -e '
+            const vm = require("node:vm");
+            let data = "";
+            process.stdin.on("data", chunk => data += chunk).on("end", () => {
+              const scripts = JSON.parse(data);
+              scripts.forEach((script, index) => new vm.Script(`(async function(){\n${script}\n})()`, {
+                filename: `action.yml#script-${index + 1}`
+              }));
+              console.log(`embedded scripts ok (${scripts.length})`);
+            });
+          '
+
+      - name: Compile extracted action programs
+        run: |
+          node --check src/core.js
+          node --check src/prepare.js
+          node --check src/normalize.js
+          node --check src/freshness.js
+          node --check src/apply-labels.js
+          node --check src/finalize.js
+          ruby -c src/resolve.rb
+
   yaml:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Validate YAML files
         run: |
@@ -41,8 +94,8 @@ jobs:
 
           replacements = {
             '{{trigger_reason}}' => 'Issue title or body changed. Run the initial AI analysis again.',
-            '{{current_labels}}' => 'question, needs-info',
-            '{{issue_title}}' => '[Test] How should rerun be configured in YAML?',
+            '{{issue_title}}' => format_multiline.call("[Test] How should rerun be configured in YAML?\nSecond title line", detect_indent.call('issue_title')),
+            '{{current_labels}}' => format_multiline.call("question, needs-info\npriority/high", detect_indent.call('current_labels')),
             '{{issue_body}}' => format_multiline.call("Line 1\n\nLine 3", detect_indent.call('issue_body')),
             '{{recent_comments}}' => format_multiline.call("bot: previous result\nuser: added more context", detect_indent.call('recent_comments')),
             '{{open_issues}}' => format_multiline.call("#12 | Similar question | labels=[question] | body=...", detect_indent.call('open_issues'))
@@ -52,3 +105,24 @@ jobs:
           YAML.safe_load(rendered, aliases: false)
           puts 'prompt render ok'
           RUBY
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: '1.23.x'
+
+      - name: Lint GitHub workflows
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          # actionlint v1.7.7 predates the GitHub Models "models" permission.
+          # Keep the explicit compatibility ignore until actionlint recognizes it.
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 \
+            -ignore 'unknown permission scope "models"' \
+            .github/workflows/*.yml

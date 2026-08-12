@@ -34,6 +34,7 @@ Use `label-map` or `label-map-file` if your repository uses different label name
 | Name | Required | Description |
 | --- | --- | --- |
 | `github-token` | Yes | Token with `issues: write` permission. In most workflows this is `secrets.GITHUB_TOKEN`. |
+| `issue-number` | No | Issue number used for `workflow_dispatch` when the event has no Issue payload. |
 | `language` | No | Output language for the bundled prompt and built-in comments. Supported values: `zh`, `en`. Default `zh`. |
 | `model` | No | Model override for inference. |
 | `prompt-file` | No | Path to a custom prompt YAML file. Defaults to the bundled `prompts/general.prompt.yml`. |
@@ -43,21 +44,27 @@ Use `label-map` or `label-map-file` if your repository uses different label name
 | `openai-compatible-token` | No | Token for the custom endpoint. |
 | `openai-compatible-headers` | No | Extra headers forwarded to `actions/ai-inference`. |
 | `comment-marker` | No | Hidden marker used to find the latest AI analysis comment. |
-| `recent-comments-limit` | No | Number of recent comments included in the prompt. Default `10`. |
-| `open-issues-limit` | No | Number of open issues included for duplicate detection. Default `50`. |
+| `ignore-label` | No | Label that disables analysis and label synchronization. Default `ai-ignore`; set empty to disable. |
+| `label-management` | No | Label policy: `replace`, `add-only`, or `none`. Default `replace`. |
+| `recent-comments-limit` | No | Number of recent comments included in the prompt. Must be an integer from `1` to `100`; default `10`. |
+| `open-issues-limit` | No | Number of open issues included for duplicate detection. Must be an integer from `1` to `100`; default `50`. |
 
 ## Outputs
 
 | Name | Description |
 | --- | --- |
 | `should-run` | Whether the current event triggered analysis. |
+| `skip-reason` | Why analysis was skipped when `should-run` is `false`. |
+| `issue-number` | Issue number selected for the run. |
 | `ok` | Whether normalization succeeded. |
 | `result-json` | Final normalized analysis result. |
-| `labels` | JSON array of mapped labels applied to the issue. |
+| `labels` | JSON array of mapped labels selected by the analysis; the policy may prevent them from being applied. |
 | `category` | Normalized category. |
 | `disposition` | Normalized disposition. |
 | `needs-info` | Whether the issue still needs more information. |
 | `comment-id` | The AI comment created or updated during this run. |
+| `comment-status` | Final comment state: `analysis`, `stale`, `fallback`, `newer-run`, `comment-missing`, or `publish-failed`. |
+| `label-sync-status` | Label synchronization state: `applied`, `policy-none`, `conflict`, `ignored`, `stale`, `failed`, or `not-applied`. |
 | `comment-strategy` | `replace_latest` or `new_comment`. |
 | `transport` | `github-models` or `openai-compatible`. |
 | `resolved-model` | Effective model resolved from the prompt file or action defaults. |
@@ -70,10 +77,16 @@ Use `label-map` or `label-map-file` if your repository uses different label name
 name: AI Issue Assistant
 
 on:
+  workflow_dispatch:
+    inputs:
+      issue-number:
+        description: Issue number to analyze
+        required: true
+        type: number
   issues:
     types: [opened, reopened, edited, labeled]
   issue_comment:
-    types: [created]
+    types: [created, edited]
 
 permissions:
   contents: read
@@ -84,7 +97,7 @@ jobs:
   analyze:
     runs-on: ubuntu-latest
     concurrency:
-      group: issue-ai-analyze-${{ github.repository }}-${{ github.event.issue.number }}
+      group: issue-ai-analyze-${{ github.repository }}-${{ github.event.issue.number || inputs.issue-number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -158,6 +171,14 @@ rerun:
 
 `label-map` and `label-map-file` rename the built-in canonical labels only. They do not add new canonical categories and do not map one canonical label to multiple repository labels.
 
+Rerun labels must be different from every mapped AI-managed label and from `ignore-label`. The configured `ignore-label` must also be different from every mapped AI-managed label. For example, `rerun=ai-rerun` is valid, while `rerun=type/bug` is rejected when `bug=type/bug` is configured.
+
+The action records the labels it has added in a hidden metadata marker inside its AI comment. In `replace` mode, it removes only labels recorded as AI-owned; labels that predate the metadata remain untouched. During analysis, if a maintainer changes any currently managed label, the action reports `label-sync-status: conflict` and does not overwrite the manual change. On the first run after upgrading, existing labels are treated conservatively and are not claimed retroactively.
+
+Before changing labels, the action also records a hidden pending intent. After GitHub confirms the label update, the intent is marked as confirmed so a later run can recover ownership if finalization is interrupted. Tentative intents are never used to claim labels after a manual conflict.
+
+By default, the action replaces only its managed labels. Use `label-management: add-only` to preserve existing managed labels, or `label-management: none` to publish analysis without changing labels. Add the `ai-ignore` label (or configure another `ignore-label`) when a maintainer wants to keep AI away from an issue.
+
 ## Custom Label Extensions
 
 The built-in canonical labels are:
@@ -216,7 +237,15 @@ This approach keeps the action behavior predictable while still allowing larger 
 ## Behavior
 
 - `issues.opened`, `issues.reopened`, `issues.edited`, and configured rerun labels trigger analysis.
+- `workflow_dispatch` can analyze a selected open Issue by supplying `issue-number`.
+- Closed issues and pull-request conversations are skipped.
 - If the issue author replies while `needs-info` is present, the action creates a new AI comment.
 - Configured rerun labels from label management update the latest AI comment.
 - The action manages only the mapped labels for the canonical labels above.
+- A single finalization step always attempts to replace the pending comment with an analysis, stale-result, cancellation/fallback, or newer-run status.
+- Before publishing, the action rechecks the latest non-AI discussion; a new or edited user comment invalidates the in-flight result.
 - The action does not close issues.
+
+Custom prompt files must preserve the bundled JSON contract. The field `needsInfo` must be a boolean, `confidence` must be a number from `0` to `1`, and all required fields must be present; malformed model output fails closed and produces a fallback comment.
+
+For stricter supply-chain control, pin `mingzaily/issue-ai-analyze` to a full release commit SHA instead of the convenience tag `@v1`. The bundled third-party actions are pinned to full SHAs.
