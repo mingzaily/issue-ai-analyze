@@ -76,7 +76,7 @@ test('documentation describes rerun label isolation and every final comment stat
   for (const workflowDocument of [workflow, exampleWorkflow]) {
     assert.doesNotMatch(workflowDocument, /models: read/);
     assert.match(workflowDocument, /copilot-requests: write/);
-    assert.match(workflowDocument, /model: gpt-4\.1/);
+    assert.doesNotMatch(workflowDocument, /^\s+model: gpt-4\.1$/m);
   }
   assert.equal(packageJson.version, '1.2.0');
 });
@@ -145,6 +145,18 @@ test('resolver rejects rerun labels that overlap mapped AI-managed labels', () =
   assert.match(customResult.output, /use_custom_endpoint=true/);
   assert.match(customResult.output, /resolved_model=deepseek-chat/);
   assert.match(customResult.prompt, /model: deepseek-chat/);
+
+  const customDefaultResult = runResolver('bug=type/bug\nrerun=ai-rerun', {
+    INPUT_OPENAI_COMPAT_ENDPOINT: 'https://example.test/v1',
+    INPUT_OPENAI_COMPAT_TOKEN: 'test-token'
+  });
+  assert.match(customDefaultResult.output, /resolved_model=openai\/gpt-4\.1/);
+  assert.match(customDefaultResult.prompt, /model: openai\/gpt-4\.1/);
+
+  const copilotDefaultResult = runResolver('bug=type/bug\nrerun=ai-rerun');
+  assert.match(copilotDefaultResult.output, /transport=copilot/);
+  assert.match(copilotDefaultResult.output, /resolved_model=\n/);
+  assert.doesNotMatch(copilotDefaultResult.prompt, /^model:/m);
 
   assert.throws(
     () => runResolver('bug=type/bug', { INPUT_MODEL: 'openai/azure/gpt-4.1' }),

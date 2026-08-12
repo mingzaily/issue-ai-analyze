@@ -18,7 +18,7 @@ inputs:
     required: false
     default: ""
   model:
-    description: Optional model override. Copilot accepts names such as gpt-4.1; legacy openai/<model> names are converted for the Copilot transport. Custom endpoints receive the configured model unchanged.
+    description: Optional model override. Leave empty for Copilot to choose its currently available default; legacy openai/<model> names are converted for the Copilot transport. Custom endpoints receive the configured model unchanged.
     required: false
     default: ""
   language:

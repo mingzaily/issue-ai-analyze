@@ -36,7 +36,7 @@
 | `github-token` | 是 | 需要有 `issues: write`；默认 Copilot 通道还需要 `copilot-requests: write` 的 GitHub Token。大多数场景直接传 `secrets.GITHUB_TOKEN` 即可。 |
 | `issue-number` | 否 | `workflow_dispatch` 没有 Issue payload 时使用的 Issue 编号。 |
 | `language` | 否 | 内置 prompt 和内置评论文案的输出语言。支持值：`zh`、`en`，默认 `zh`。 |
-| `model` | 否 | 推理模型覆盖值。 |
+| `model` | 否 | 可选的模型覆盖值。留空时由 Copilot 自动选择当前可用的默认模型；自定义接口会原样接收该值。 |
 | `prompt-file` | 否 | 自定义 prompt YAML 文件路径。默认使用内置的 `prompts/general.prompt.yml`。 |
 | `label-map` | 否 | 内联标签映射，按行写 `key=value`。重跑标签用 `rerun=`。 |
 | `label-map-file` | 否 | YAML 标签管理配置文件路径，优先级高于 `label-map`。 |
@@ -67,13 +67,13 @@
 | `label-sync-status` | 标签同步状态：`applied`、`policy-none`、`conflict`、`ignored`、`stale`、`failed` 或 `not-applied`。 |
 | `comment-strategy` | `replace_latest` 或 `new_comment`。 |
 | `transport` | `copilot` 或 `openai-compatible`。 |
-| `resolved-model` | 从 prompt 文件或 action 默认值解析得到的最终模型；Copilot 通道会把旧的 `openai/<model>` 名称规范化。 |
+| `resolved-model` | 从 prompt 文件或 action 默认值解析得到的最终模型；为空表示由 Copilot CLI 自动选择默认模型，Copilot 通道会把旧的 `openai/<model>` 名称规范化。 |
 | `resolved-response-format` | 从 prompt 文件解析得到的最终响应格式。 |
 | `resolved-model-parameters` | 从 prompt 文件解析得到的最终 `modelParameters` 对象，JSON 字符串形式。 |
 
 ## 推理通道
 
-默认通道是通过 `actions/ai-inference@v3` 调用 GitHub Copilot CLI。Action 会安装最新版 `@github/copilot`，把 workflow 的 `GITHUB_TOKEN` 交给 CLI，并使用配置的 Copilot 模型。`model: gpt-4.1` 是有效覆盖值；如果最终模型为空，则允许 Copilot CLI 自动选择默认模型。只有 Copilot 通道会把旧的 `openai/gpt-4.1` 形式转换为 `gpt-4.1`。
+默认通道是通过 `actions/ai-inference@v3` 调用 GitHub Copilot CLI。内置 prompt 不再固定模型，Action 会安装最新版 `@github/copilot`，把 workflow 的 `GITHUB_TOKEN` 交给 CLI，并让 Copilot 自动选择当前可用的默认模型。模型可用性会受调用方 Copilot 权限影响，只有确认当前组织或账号可用时才应显式填写 `model`。只有 Copilot 通道会把旧的 `openai/<model>` 形式转换为 `<model>`。
 
 调用方需要配置以下最小权限：
 
@@ -123,7 +123,6 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           label-map-file: ./.github/issue-ai-label-map.yml
-          model: gpt-4.1
           language: zh
 ```
 
@@ -151,7 +150,6 @@ jobs:
 - uses: mingzaily/issue-ai-analyze@v1
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
-    model: gpt-4.1
     language: en
     prompt-file: ./.github/prompts/my-custom-issue-analysis.prompt.yml
 ```

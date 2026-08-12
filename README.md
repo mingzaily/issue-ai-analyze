@@ -36,7 +36,7 @@ Use `label-map` or `label-map-file` if your repository uses different label name
 | `github-token` | Yes | Token with `issues: write` and, for the default Copilot transport, `copilot-requests: write` permission. In most workflows this is `secrets.GITHUB_TOKEN`. |
 | `issue-number` | No | Issue number used for `workflow_dispatch` when the event has no Issue payload. |
 | `language` | No | Output language for the bundled prompt and built-in comments. Supported values: `zh`, `en`. Default `zh`. |
-| `model` | No | Model override for inference. |
+| `model` | No | Optional model override. Leave empty for Copilot to choose its currently available default; custom endpoints receive the configured value unchanged. |
 | `prompt-file` | No | Path to a custom prompt YAML file. Defaults to the bundled `prompts/general.prompt.yml`. |
 | `label-map` | No | Inline label mapping. Use one `key=value` entry per line. Use `rerun=` for rerun labels. |
 | `label-map-file` | No | Path to a YAML label management file. Overrides `label-map`. |
@@ -67,13 +67,13 @@ Use `label-map` or `label-map-file` if your repository uses different label name
 | `label-sync-status` | Label synchronization state: `applied`, `policy-none`, `conflict`, `ignored`, `stale`, `failed`, or `not-applied`. |
 | `comment-strategy` | `replace_latest` or `new_comment`. |
 | `transport` | `copilot` or `openai-compatible`. |
-| `resolved-model` | Effective model resolved from the prompt file or action defaults. Legacy `openai/<model>` names are normalized for Copilot. |
+| `resolved-model` | Effective model resolved from the prompt file or action defaults. Empty means Copilot CLI chooses its default; legacy `openai/<model>` names are normalized for Copilot. |
 | `resolved-response-format` | Effective response format resolved from the prompt file. |
 | `resolved-model-parameters` | Effective `modelParameters` object resolved from the prompt file, serialized as JSON. |
 
 ## Inference Transports
 
-The default transport is GitHub Copilot CLI through `actions/ai-inference@v3`. The action installs the latest `@github/copilot`, passes the workflow's `GITHUB_TOKEN`, and uses the configured Copilot model. `model: gpt-4.1` is a valid override; leaving the resolved model empty lets Copilot choose its default. Legacy `openai/gpt-4.1` style names are converted to `gpt-4.1` only for this transport.
+The default transport is GitHub Copilot CLI through `actions/ai-inference@v3`. The bundled prompt leaves `model` empty, so the action installs the latest `@github/copilot`, passes the workflow's `GITHUB_TOKEN`, and lets Copilot choose a currently available default. Model availability can vary by Copilot entitlement; set `model` only to a model currently available to the calling organization or account. Legacy `openai/<model>` style names are converted to `<model>` only for the Copilot transport.
 
 The calling workflow must grant the minimum permissions below:
 
@@ -123,7 +123,6 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           label-map-file: ./.github/issue-ai-label-map.yml
-          model: gpt-4.1
           language: zh
 ```
 
@@ -151,7 +150,6 @@ When `openai-compatible-endpoint` and `openai-compatible-token` are both set, th
 - uses: mingzaily/issue-ai-analyze@v1
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
-    model: gpt-4.1
     language: en
     prompt-file: ./.github/prompts/my-custom-issue-analysis.prompt.yml
 ```

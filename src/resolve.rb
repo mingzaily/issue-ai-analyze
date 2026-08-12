@@ -174,6 +174,14 @@ end
 
 model_override = ENV['INPUT_MODEL'].to_s.strip
 prompt['model'] = model_override unless model_override.empty?
+
+# Keep the pre-migration bundled default for the explicit compatibility path.
+# Copilot must be allowed to choose a currently available default model instead
+# of receiving a stale provider-specific model name.
+if transport == 'openai-compatible' && prompt_source == default_prompt && model_override.empty? && prompt['model'].to_s.strip.empty?
+  prompt['model'] = 'openai/gpt-4.1'
+end
+
 resolved_model = prompt['model'].to_s.strip
 
 if transport == 'copilot'
