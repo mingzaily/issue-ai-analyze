@@ -84,7 +84,11 @@ permissions:
   copilot-requests: write
 ```
 
-For organization repositories, an administrator must enable **Allow use of Copilot CLI billed to the organization**. Copilot requests can consume the organization or repository owner's GitHub Copilot AI credits, so enable the policy and spending controls deliberately. If the policy, permission, authentication, or CLI installation is unavailable, the action keeps its fallback-comment behavior and exposes a diagnostic such as `copilot-cli-install-failed` or `copilot-inference-failed`; a successful workflow conclusion alone does not prove that inference succeeded.
+The default transport requires access to GitHub Copilot; installing the CLI alone is not enough. For an organization-owned repository using `GITHUB_TOKEN`, an organization owner must enable **Allow use of Copilot CLI billed to the organization** in the organization's Copilot policies. GitHub documents this policy as separate from the Copilot licensing setup: an organization that is only hosting the repository may need the policy even when Copilot licenses are managed elsewhere. For a personally owned repository, usage is billed to the repository owner's Copilot seat, so that account must have an available Copilot entitlement. See [Using Copilot CLI in GitHub Actions with `GITHUB_TOKEN`](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli-in-actions) and [About using Copilot CLI in GitHub Actions](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/copilot-cli-in-github-actions).
+
+Copilot requests consume GitHub AI credits. If the organization policy cannot be enabled, a fine-grained PAT with the `Copilot Requests` permission can be passed as `github-token`; it is billed to the PAT owner's Copilot seat and still needs `issues: write` for this action to update comments and labels. If you do not want to use GitHub Copilot, configure the explicit OpenAI-compatible transport below; that path does not require Copilot access or `copilot-requests: write`.
+
+If the policy, entitlement, permission, authentication, or CLI installation is unavailable, the action keeps its fallback-comment behavior and exposes a diagnostic such as `copilot-cli-install-failed` or `copilot-inference-failed`; a successful workflow conclusion alone does not prove that inference succeeded.
 
 GitHub Models is not used by the default transport. It was retired; existing OpenAI-compatible configurations remain supported through the explicit compatibility transport.
 
@@ -131,6 +135,8 @@ See [`examples/issue-analyze.yml`](./examples/issue-analyze.yml) for a complete 
 ## OpenAI-Compatible Endpoint
 
 When `openai-compatible-endpoint` and `openai-compatible-token` are both set, the action keeps the explicit OpenAI-compatible transport and forwards `openai-compatible-headers`; the Copilot transport is not used. This preserves existing custom endpoint integrations.
+
+This compatibility path does not require GitHub Copilot or `copilot-requests: write`, but it still requires `issues: write` for the GitHub API operations performed by the action.
 
 ```yaml
 - uses: mingzaily/issue-ai-analyze@v1

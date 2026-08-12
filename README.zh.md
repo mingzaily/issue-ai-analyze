@@ -84,7 +84,11 @@ permissions:
   copilot-requests: write
 ```
 
-组织仓库还必须启用 **Allow use of Copilot CLI billed to the organization**。Copilot 请求可能消耗组织或仓库所有者的 GitHub Copilot AI credits，请结合组织策略和 spending controls 谨慎启用。如果策略、权限、鉴权或 CLI 安装不可用，Action 仍会发布 fallback 评论，并给出 `copilot-cli-install-failed` 或 `copilot-inference-failed` 等诊断；workflow 显示 Success 不能单独证明推理成功。
+默认通道需要具备 GitHub Copilot 使用权，仅安装 CLI 并不够。组织仓库使用 `GITHUB_TOKEN` 时，组织管理员必须在 Copilot policy 中启用 **Allow use of Copilot CLI billed to the organization**。GitHub 文档明确说明，这个 policy 与 Copilot license 配置是分开的：即使 Copilot license 由其他组织管理，实际承载仓库的组织仍可能需要开启这个 policy。个人仓库使用 `GITHUB_TOKEN` 时，费用会计入仓库所有者的 Copilot seat，因此仓库所有者必须拥有可用的 Copilot 权益。详见 [GitHub Actions 中使用带 `GITHUB_TOKEN` 的 Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli-in-actions) 和 [GitHub Actions 中使用 Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/copilot-cli-in-github-actions)。
+
+Copilot 请求会消耗 GitHub AI credits。如果组织无法开启上述 policy，可以传入具备 `Copilot Requests` 权限的 fine-grained PAT 作为 `github-token`；费用会计入 PAT 所有者的 Copilot seat，同时本 Action 仍需要该 Token 具备 `issues: write` 来更新评论和标签。如果不想使用 GitHub Copilot，请改用下面的显式 OpenAI-compatible 通道；该通道不需要 Copilot 权益，也不需要 `copilot-requests: write`。
+
+如果 policy、Copilot 权益、权限、鉴权或 CLI 安装不可用，Action 仍会发布 fallback 评论，并给出 `copilot-cli-install-failed` 或 `copilot-inference-failed` 等诊断；workflow 显示 Success 不能单独证明推理成功。
 
 默认通道不再使用 GitHub Models。GitHub Models 已退役；已有的 OpenAI-compatible 配置会继续通过显式兼容通道运行。
 
@@ -131,6 +135,8 @@ jobs:
 ## OpenAI-Compatible 接口
 
 同时设置 `openai-compatible-endpoint` 和 `openai-compatible-token` 时，Action 会继续使用显式的 OpenAI-compatible 通道，并透传 `openai-compatible-headers`，不会调用 Copilot。这保证已有自定义接口配置不因默认通道迁移而失效。
+
+这个兼容通道不需要 GitHub Copilot 或 `copilot-requests: write`，但 Action 仍需要 `issues: write` 来调用 GitHub API 更新评论和标签。
 
 ```yaml
 - uses: mingzaily/issue-ai-analyze@v1

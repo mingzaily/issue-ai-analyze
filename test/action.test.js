@@ -72,6 +72,9 @@ test('documentation describes rerun label isolation and every final comment stat
     assert.match(document, /copilot-requests: write/);
     assert.match(document, /openai-compatible/);
     assert.match(document, /GitHub Models.*retired|GitHub Models.*退役/s);
+    assert.match(document, /Allow use of Copilot CLI billed to the organization/);
+    assert.match(document, /Copilot Requests/);
+    assert.match(document, /does not require GitHub Copilot|不需要 GitHub Copilot/);
   }
   for (const workflowDocument of [workflow, exampleWorkflow]) {
     assert.doesNotMatch(workflowDocument, /models: read/);
